@@ -37,7 +37,7 @@
 
 v0.1 spike 进行中：**[docs/spike-runbook.md](docs/spike-runbook.md)** — 对 mcp-memory-service 做一周 consolidation 成色观察（代谢 or 膨胀？），结果决定管家 v0.1 的接管范围。
 
-命名：Mnevo 为自造词（希腊语 μνήμη 词根），2026-10 查证近乎零碰撞（详见 PLAN §14-3 的五连撞查证记录）；发布前可零成本改名。
+命名：Mnevo（希腊语 μνήμη 词根自造词，2026-10-14 定名；查证记录见 PLAN §14-3）。设计哲学：记忆 → 叙事自我 → 延展心智（PLAN §0.4）。
 
 ## License
 

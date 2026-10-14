@@ -1,9 +1,9 @@
-# Mnevo（暂定名）：个人外置大脑（Personal Brain）项目计划书
+# Mnevo：个人外置大脑（Personal Brain）项目计划书
 
 > 版本：v0.2（共识版，2026-10-14）
 > 性质：经 19 问拷打对齐后的落地计划，替代 v0.1 框架草案
-> 状态：任务 0 查证关闭、部署转向公司开发服务器（Q22）、命名暂定 Mnevo（Q23），v0.1 已开工
-> 命名沿革：Engram → 撞名成灾（§14-3）→ 自造词 **Mnevo**（μνήμη 词根；下文旧段落中的 Engram 均指本项目）
+> 状态：任务 0 查证关闭、部署转向公司开发服务器（Q22）、定名 Mnevo（Q23/Q24），v0.1 已开工
+> 命名沿革：Engram → 撞名成灾（§14-3）→ 自造词 **Mnevo**（μνήμη 词根）→ 2026-10-14 用户确认定名；下文旧段落中的 Engram 均指本项目
 
 ---
 
@@ -36,7 +36,20 @@ v0.2 补一条站位：完整便携的个人记录同时也是监控者的梦想
 
 ### 0.3 铁律：代谢先于积累（v0.2 新增，拷打核心结论）
 
-**积累不等于懂你，策展质量才等于懂你。** 没有代谢的"记录一切"会退化为死文档堆（实证：pi 记忆系统的官方教训——stale 条目反复浮出，导致自信的错误回答）。本项目的主角不是存储，而是代谢。这条铁律决定了仓库身份（§1）与架构重心（§3）。
+**积累不等于懂你,策展质量才等于懂你。** 没有代谢的"记录一切"会退化为死文档堆(实证:pi 记忆系统的官方教训--stale 条目反复浮出,导致自信的错误回答)。本项目的主角不是存储,而是代谢。这条铁律决定了仓库身份（§1）与架构重心（§3）。
+
+### 0.4 哲学锚点：记忆 → 叙事自我 → 延展心智（2026-10-14，Q24）
+
+设计不仅从功能出发，也从一个论点出发：
+
+1. **基座模型有世界知识，没有个人经历**——像语义记忆完好、情景记忆缺失的失忆症患者：什么都知道，没有“去年夏天”。Mnevo 补的正是情景层（§0.2 的仿生表在说同一件事）。
+2. **自我是被记住、被重构出来的**——Locke（人格同一性=记忆连续）、Tulving（情景记忆→自传体意识）、Bartlett（记忆=重构，非存档）、Ricoeur（叙事同一性）四条线索同指：持续记录+持续重构 = 功能意义上的“自我”在生长。Mnevo 的管线（记录→蒸馏→身份层提案）正是这个结构。
+3. **延展的是“你”，不是它**——Clark & Chalmers 延展心智（Otto 的笔记本）：外置记忆扩展的是使用者的自我。Mnevo 是“你+系统”混合体的外置海马体与第二叙事者；“机器只提案、人工确认”铁律（§4.1）的哲学根据：**叙事的最终署名人必须是你**。
+4. **诚实边界**：不说“自由意志/意识的开端”——缺内驱目标（目标由用户注入）、第一人称视角（它是索引器不是经历者）、利害（不承担选择后果）。《Her》的 Samantha 之“升华”恰是反例：真正拥有经历的主体会走向自己的目的，而记忆产品不能有这个倾向。
+
+一句话：自我不是被造出来的，是被记住、被重构出来的；Mnevo 把这个过程外置化，并把署名权留给人。
+
+（引用与展开：工作空间 `research/philosophy-memory-self.md`，未随仓发布）
 
 ---
 
@@ -44,11 +57,11 @@ v0.2 补一条站位：完整便携的个人记录同时也是监控者的梦想
 
 ### 1.1 是什么
 
-**Engram = 活的记忆层（living memory layer）**：管家（巩固/代谢）+ 身份层 + 记忆包（导出/导入）+ 各 Agent 习惯适配，架在**可插拔的成熟存储引擎**之上。
+**Mnevo = 活的记忆层（living memory layer）**:管家(巩固/代谢)+ 身份层 + 记忆包(导出/导入)+ 各 Agent 习惯适配,架在**可插拔的成熟存储引擎**之上。
 
 - **自建开源仓库**，Apache-2.0，既是自用工具也是个人作品；
 - 存储与检索不自研，引擎永远只经 MCP/REST 调用，**绝不 import 引擎内部**（保证可换底座）；
-- 一句话定位：**"会睡觉的文件柜"**——竞品做被动的"文件柜"，Engram 做"睡眠"。
+- 一句话定位:**"会睡觉的文件柜"**--竞品做被动的“文件柜”，Mnevo 做“睡眠”。
 
 ### 1.2 不是什么（决策墓碑，防止回潮）
 
@@ -81,7 +94,7 @@ v0.2 补一条站位：完整便携的个人记录同时也是监控者的梦想
 └──────┬────────┘  └──────────┬─────────────┘  └──────────────┬────────────────────┘
        │  MCP (Remote: HTTPS+OAuth 2.1 / stdio)               │
 ┌──────▼──────────────────────────────────────────────────────▼──────┐
-│                    Engram（本仓库，你的代码）                          │
+│                    Mnevo（本仓库，你的代码）                           │
 │  ┌────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌───────────┐  │
 │  │ 管家    │ │ 身份层    │ │ 记忆包    │ │ adapters/  │ │ 审计日志   │  │
 │  │ 多条件触发│ │ markdown │ │ 导出/导入 │ │ 习惯说明书  │ │ (管家必写) │  │
@@ -97,7 +110,7 @@ v0.2 补一条站位：完整便携的个人记录同时也是监控者的梦想
         观察名单：Graphiti（时间性谱系）/ mem0 OSS（二号引擎，验证可插拔）
 ```
 
-层间契约：**Engram 层对引擎只有 MCP 工具调用一种依赖**。换引擎 = 换实现方，Engram 层零改动。
+层间契约：**Mnevo 层对引擎只有 MCP 工具调用一种依赖**。换引擎 = 换实现方，Mnevo 层零改动。
 
 ---
 
@@ -215,11 +228,11 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 | 项 | 选型 | 说明 |
 | --- | --- | --- |
 | 底座引擎 | mcp-memory-service | Apache-2.0；SQLite-vec 零配置；stdio/REST/Remote MCP+OAuth 全齐 |
-| Engram 语言 | Python | 与引擎生态一致；MCP SDK 成熟 |
+| Mnevo 语言 | Python | 与引擎生态一致;MCP SDK 成熟 |
 | embedding | 本地 bge-small 级 | CPU 可跑，VPS 友好 |
 | 蒸馏 LLM | 便宜云端模型（personal）/ 禁用（work，待政策） | 单次成本上限 ~¥0.5 |
 | 许可 | Apache-2.0 | 专利授权，与依赖一致 |
-| 命名 | **Mnevo（暂定）**：μνήμη 词根自造词，2026-10-14 查证近乎零碰撞 | 开仓前用户可否决；已查 PyPI/npm/GitHub |
+| 命名 | **Mnevo**：μνήμη 词根自造词 | 2026-10-14 用户确认定名；PyPI/npm/GitHub 已查近乎零碰撞 |
 
 ---
 
@@ -255,7 +268,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 
 1. ✅ 已关闭（2026-10-14）：WorkBuddy **支持**自定义 MCP 连接；
 2. ✅ 已关闭（2026-10-14）：公司对第三方 AI 工具**无限制**（用户原话：想怎么样就怎么用）；
-3. ✅ 查证完成(2026-10-14):**Engram 撞名成灾**(PyPI:engram-ms/engram-memory/engram-memory-system/engram-contextdb/engram-chateau,裸名也被无关项目占用;npm:engram-cli/engram-sdk/@cartisien/engram/@engram-ai-memory 等,其中 engram-ms/engram-cli/engram-sdk 与本项目同赛道);**备选 Hippo 也撞**(npm hippo-memory 同赛道"biologically-inspired memory...decay by default",PyPI 裸名被占,@juspay/hippocampus 2k dl/周)。本项目不发布 PyPI/npm 包,撞名实际成本 = 作品集可发现性 → 用户裁决换独特名（B）；复查三个候选亦全部撞名（Anamnesis：anamnesis-memory 即 MCP 记忆服务器、oscardvs/anamnesis 自带 consolidation loop；Madeleine：撞 2026-10 新发同名 conversational-memory 论文；Mnema：GitHub 三个同赛道仓库）→ 唯一出路是自造词：**Mnevo（暂定）**，查证仅撞一个 2018 年休眠无关项目，开仓前可零成本改名；
+3. ✅ 查证完成(2026-10-14):**Engram 撞名成灾**(PyPI:engram-ms/engram-memory/engram-memory-system/engram-contextdb/engram-chateau,裸名也被无关项目占用;npm:engram-cli/engram-sdk/@cartisien/engram/@engram-ai-memory 等,其中 engram-ms/engram-cli/engram-sdk 与本项目同赛道);**备选 Hippo 也撞**(npm hippo-memory 同赛道"biologically-inspired memory...decay by default",PyPI 裸名被占,@juspay/hippocampus 2k dl/周)。本项目不发布 PyPI/npm 包,撞名实际成本 = 作品集可发现性 → 用户裁决换独特名(B);复查三个候选亦全部撞名(Anamnesis:anamnesis-memory 即 MCP 记忆服务器、oscardvs/anamnesis 自带 consolidation loop;Madeleine:撞 2026-10 新发同名 conversational-memory 论文;Mnema:GitHub 三个同赛道仓库)→ 唯一出路是自造词：**Mnevo**，查证仅撞一个 2018 年休眠无关项目——2026-10-14 用户确认定名；
 4. PAM 映射的字段对齐细节（v0.2）；
 5. 团队/家庭共享脑的 schema 口子（远期，不设计不承诺）。
 6. **WorkBuddy → 公司开发服务器的网络可达性**（WorkBuddy 是 SaaS 还是内网部署？能否访问公司服务器的 HTTPS+OAuth 端点——决定 Remote MCP 暴露方案：内网直连 or TLS 反代；查证前不暴露端口）；
@@ -285,7 +298,8 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 | Q20（任务0查证） | WorkBuddy 支持自定义 MCP；公司 AI 政策无限制 → work 蒸馏解冻、WorkBuddy 接入放行 | 2026-10-14 用户确认；经历/载荷分界与反渗透隔离不随之放松 |
 | Q21（命名查证） | Engram/Hippo 在 AI 记忆领域双双撞名 → 定名挂起待裁决 | 不发包则成本仅为可发现性；候选 Anamnesis/Madeleine/Mnema 选定后再查 |
 | Q22（部署转向） | 主战场移到公司开发服务器（work 区先行）：高强度真实使用加速迭代 | 2026-10-14 用户提出；个人区永不落公司硬件（反渗透对偶），逃生舱=记忆包 |
-| Q23（定名） | 自造词 **Mnevo（暂定）**：Engram/Hippo/Anamnesis/Madeleine/Mnema 五连撞后，唯有 coinage 保证可发现性 | 开仓前用户一票否决权，改名零成本 |
+| Q23（定名） | 自造词 **Mnevo**（2026-10-14 确认）：Engram/Hippo/Anamnesis/Madeleine/Mnema 五连撞后，唯有 coinage 保证可发现性 | 补查 autonoesis/palimpsest/hypomnesis 亦全被占用，规律坐实 |
+| Q24（哲学锚点） | 愿景升级为“记忆→叙事自我→延展心智”（§0.4），但明确边界：不说自由意志/意识开端；延展的是用户的自我，不是机器的 | 2026-10-14 用户提出设想后共同细化；养料库=工作空间 research/（未入库） |
 
 ---
 
