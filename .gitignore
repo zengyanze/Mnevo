@@ -1,0 +1,21 @@
+# pi 会话目录
+.pi/
+
+# 身份层真身不入库（本仓库未来公开）
+identity/live/
+
+# 观察记录（含工作区真实数据线索，入库前须脱敏评审）
+observations/
+
+# 引擎数据与本地状态
+*.db
+*.sqlite
+*.sqlite3
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+outputs/
+.DS_Store
+Thumbs.db
