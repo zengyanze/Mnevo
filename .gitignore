@@ -16,6 +16,12 @@ observations/
 venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 outputs/
+
+# 记忆包（含真实记忆内容，绝不入库）
+*.mempack/
+*.mempack.tar.gz
+
 .DS_Store
 Thumbs.db
