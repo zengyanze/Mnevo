@@ -298,14 +298,16 @@ def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):  # Windows 控制台防 GBK 乱码
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(prog="mnevo_pack",
-                                     description="Mnevo memory pack v0.1")
-    parser.add_argument("--url", default="http://127.0.0.1:8000")
-    parser.add_argument("--token-env", default="MNEVO_WORK_TOKEN")
-    parser.add_argument("--store", default="default")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--url", default="http://127.0.0.1:8000")
+    common.add_argument("--token-env", default="MNEVO_WORK_TOKEN")
+    common.add_argument("--store", default="default")
+    parser = argparse.ArgumentParser(
+        prog="mnevo_pack", description="Mnevo memory pack v0.1",
+        parents=[common])
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_export = sub.add_parser("export", help="引擎 -> mempack 目录")
+    p_export = sub.add_parser("export", parents=[common], help="引擎 -> mempack 目录")
     p_export.add_argument("--out", required=True)
     p_export.add_argument("--identity", help="身份层目录（默认不附带）")
     p_export.add_argument("--tar", action="store_true", help="额外打 tar.gz")
@@ -313,12 +315,14 @@ def main(argv: list[str] | None = None) -> int:
     p_export.add_argument("--engine", default="mcp-memory-service")
     p_export.set_defaults(func=cmd_export)
 
-    p_import = sub.add_parser("import", help="mempack -> 引擎（按内容重存，幂等）")
+    p_import = sub.add_parser("import", parents=[common],
+                              help="mempack -> 引擎（按内容重存，幂等）")
     p_import.add_argument("--pack", required=True)
     p_import.add_argument("--dry-run", action="store_true")
     p_import.set_defaults(func=cmd_import)
 
-    p_verify = sub.add_parser("verify", help="校验包完整性（可选对引擎比对）")
+    p_verify = sub.add_parser("verify", parents=[common],
+                              help="校验包完整性（可选对引擎比对）")
     p_verify.add_argument("--pack", required=True)
     p_verify.add_argument("--against-engine", action="store_true")
     p_verify.set_defaults(func=cmd_verify)
