@@ -299,9 +299,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--url", default="http://127.0.0.1:8000")
-    common.add_argument("--token-env", default="MNEVO_WORK_TOKEN")
-    common.add_argument("--store", default="default")
+    common.add_argument("--url", default=argparse.SUPPRESS)
+    common.add_argument("--token-env", default=argparse.SUPPRESS)
+    common.add_argument("--store", default=argparse.SUPPRESS)
     parser = argparse.ArgumentParser(
         prog="mnevo_pack", description="Mnevo memory pack v0.1",
         parents=[common])
@@ -328,6 +328,10 @@ def main(argv: list[str] | None = None) -> int:
     p_verify.set_defaults(func=cmd_verify)
 
     args = parser.parse_args(argv)
+    for name, dv in (("url", "http://127.0.0.1:8000"),
+                     ("token_env", "MNEVO_WORK_TOKEN"),
+                     ("store", "default")):
+        setattr(args, name, getattr(args, name, dv))
     return args.func(args)
 
 

@@ -47,6 +47,17 @@ python scripts/mnevo_pack.py import --pack my.mempack --dry-run                 
 
 格式：`manifest.json`（版本+每文件 sha256）+ `memories.jsonl`（内容真源，向量不入包，导入端重算）+ `identity/`（仅已确认文件）。测试：`pytest tests/`（引擎不可达时真机用例自动 skip）。
 
+### 管家 v0.1 骨架（PLAN §7/Q26：确定性流水线+人工确认面）
+
+```bash
+python scripts/mnevo_butler.py scan                  # 全库扫描：memory-as-query 近重复对→提案
+python scripts/mnevo_butler.py review --list          # 待审提案（pi 会话里直接跑）
+python scripts/mnevo_butler.py review --decide <id> accept|dismiss   # 确认=删重复/驳回
+python scripts/mnevo_butler.py audit --tail 20        # 追加式审计日志
+```
+
+不是常驻 agent：候选发现=确定性代码（引擎检索作相似度 oracle，阈值 0.90），提案/审计落盘 markdown+jsonl（天然可审计），LLM 蒸馏提案是 v0.2 插槽（scan 的提案文件即其输入格式）。
+
 命名：Mnevo（希腊语 μνήμη 词根自造词，2026-10-14 定名；查证记录见 PLAN §14-3）。设计哲学：记忆 → 叙事自我 → 延展心智（PLAN §0.4）。
 
 ## License
