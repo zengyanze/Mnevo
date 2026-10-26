@@ -167,3 +167,25 @@ def test_live_export_readonly(tmp_path, monkeypatch):
     manifest, back = mp.read_pack(pack)  # 含完整性校验
     assert manifest["memory_count"] == len(rows) == len(back)
     assert {r["content_hash"] for r in back} == {r["content_hash"] for r in rows}
+
+
+def test_import_passes_store_field(monkeypatch):
+    """import --store acceptance 时 POST body 必须带 store 字段。"""
+    import argparse
+    from pathlib import Path as P
+    # 复用既有桩：直接调 post_memory 断言 body
+    spec = importlib.util.spec_from_file_location(
+        "mnevo_pack", P(__file__).resolve().parents[1] / "scripts" / "mnevo_pack.py")
+    mp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mp)
+    captured = {}
+
+    def fake_http_json(url, token, method="GET", body=None, timeout=60):
+        captured.update(body=body)
+        return 200, {"success": True}
+
+    monkeypatch.setattr(mp, "http_json", fake_http_json)
+    outcome, _ = mp.post_memory("http://x", "t", {"content": "c", "tags": []},
+                                store="acceptance")
+    assert outcome == "created"
+    assert captured["body"]["store"] == "acceptance"

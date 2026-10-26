@@ -203,22 +203,28 @@ def read_pack(pack_dir: Path) -> tuple[dict, list[dict]]:
 
 
 def post_memory(base_url: str, token: str, row: dict,
-                timeout: int = 60) -> tuple[str, str]:
+                timeout: int = 60, store: str | None = None) -> tuple[str, str]:
     """重存一条记忆；返回 (结果分类, 说明)。分类 ∈ created/duplicate/rejected。"""
     url = f"{base_url.rstrip('/')}/api/memories"
-    status, body = http_json(
-        url, token, method="POST",
-        body={"content": row["content"], "tags": row.get("tags") or []},
-        timeout=timeout,
+    body = {"content": row["content"], "tags": row.get("tags") or []}
+    if store:
+        body["store"] = store
+    status, resp = http_json(
+        url, token, method="POST", body=body, timeout=timeout,
     )
+    body = resp
     text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
     if status in (200, 201):
-        # v12 语义查重：HTTP 200 + success:false + "Duplicate content detected"
+        # v12 语义查重：拒存时包成 HTTP 200 + success:false + "Duplicate…"
+        # 但"相似已存仍写入"时是 success:true + duplicate 字样 → 应算 created
+        if isinstance(body, dict) and body.get("success") is False:
+            if "duplicate" in text.lower() or "exist" in text.lower():
+                return "duplicate", text[:200]
+            return "rejected", text[:200]
+        if isinstance(body, dict) and body.get("success") is True:
+            return "created", text[:200]
         if "duplicate" in text.lower() or "exist" in text.lower():
             return "duplicate", text[:200]
-        # v12 把存储/嵌入失败包成 HTTP 200 + success:false
-        if isinstance(body, dict) and body.get("success") is False:
-            return "rejected", text[:200]
         return "created", text[:200]
     if status in (409, 422) or "exist" in text.lower() or "duplicate" in text.lower():
         return "duplicate", text[:200]
@@ -264,7 +270,8 @@ def cmd_import(args: argparse.Namespace) -> int:
         return 2
     tally: dict[str, int] = {}
     for r in rows:
-        outcome, note = post_memory(args.url, token, r)
+        outcome, note = post_memory(args.url, token, r,
+                                    store=getattr(args, "store", None))
         tally[outcome] = tally.get(outcome, 0) + 1
         if outcome == "rejected":
             print(f"  [rejected] {r['content_hash'][:12]}… {note}", file=sys.stderr)

@@ -54,7 +54,7 @@ export default function (pi: ExtensionAPI) {
           type: "custom_message",
           customType: "mnevo_session_write",
           content:
-            "【Mnevo 收尾提醒】本段工作已有实际产出但尚未写记忆。请按本工作区 AGENTS.md 的 Mnevo 记忆习惯收尾：调用 mcp__mnevo-work__memory_store 写 1~2 条经历类记忆（做了什么/学到什么/卡在哪/东西在哪+指针；tags 带项目名；数据本体/客户信息/secrets/数字载荷禁入）。无可记内容或工具不可见则静默跳过，不要编造。写完只回一句「已写」。",
+            "【Mnevo 收尾提醒】本段工作已有实际产出但尚未写记忆。请按本工作区 AGENTS.md 的 Mnevo 记忆习惯收尾：调用 mcp__mnevo-work__memory_store 写 1~2 条经历类记忆（做了什么/学到什么/卡在哪/东西在哪+指针；tags 必须带项目名，例：[\"work\",\"finance-cleaning\"]，禁止空 tags 或 \"untagged\"；数据本体/客户信息/secrets/数字载荷禁入）。无可记内容或工具不可见则静默跳过，不要编造。写完只回一句「已写」。",
           display: true,
         },
       ],

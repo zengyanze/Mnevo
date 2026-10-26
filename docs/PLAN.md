@@ -258,11 +258,11 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 ### v0.1（跑通"活着"的最小闭环）
 0. ✅ **查证（已完成，2026-10-14 用户确认）**：WorkBuddy **支持**自定义 MCP；公司对第三方 AI 工具**无限制**。
 1. ✅ **Spike 判读完成（2026-10-26，观察期 10-15→10-26）**：引擎=惰性 ADD-only——8 次自动巩固零失败但 processed 累计个位数、compressed/forgotten 恒 0，v12 遗忘门槛（relevance<0.1∧90 天∧365 天）在真实使用频率下≈永不遗忘；与 2025-12 官方实测（日增 349 派生）相反，小库上无派生、无合并、无遗忘，库呈线性积累。**检索/调度/稳定性全部合格**（bge 真语义含跨语言✅、8/8 夜跑零失败✅、12 天零崩溃✅）。结论：引擎当存储层用，**代谢链全部由管家接管**（见任务 3 与 Q27）；第二发现：写入习惯靠建议性文本不生效，需机制性触发（候选：pi 会话收尾钩子）；
-2. ✅（2026-10-14）仓库骨架：README/LICENSE/.gitignore + adapters/（pi 习惯书 v0.1）+ identity/（结构说明，live 不入库）+ docs/spike-runbook.md；身份层真身种子（从 pi 记忆提炼个人部分、剔除工作载荷→提案稿待人工确认）待补。
-3. **管家 v0.1（2026-10-26 判读后定稿）**：代谢链全接管——判重（scan 骨架已有，阈值 0.90 待真实数据校准）+ LLM 蒸馏提案（插槽从 v0.2 提前到 v0.1 必做；选型=pi 同源 zai glm-5.3，OpenAI 兼容；¥0.5 上限数量级富余；公司已放行 Q20）+ 遗忘提案（提案式降权/归档，归档≠降权≠删除三操作纪律）+ 审计日志（butler audit 已就位）+ 身份层提案流；写入习惯的机制性触发已落地（2026-10-26：adapters/extensions/mnevo-session-write.ts，pi agent_before_settle 钩子，≥3 工具调用且未写才提醒、AGENTS.md 标记目录才激活、已验证不编造）。触发框架已有（cron 日巩固/夜备份/周扫描三链）。
-4. pi adapter 习惯书（adapters/pi.md v0.1 已有）+ WorkBuddy 习惯书——接入前先查证 WorkBuddy 到公司服务器的网络可达性（§14-6）。adapter 优先级：pi → WorkBuddy → Claude Desktop（MCP 原生+记忆双向）。
-5. 记忆包 v0.1（版本化私有格式）+ age 加密备份 cron（personal 包→个人 GitHub 私有仓；work 包留在公司基础设施，不外流）。
-6. 执行验收测试（§13）。
+2. ✅（2026-10-14）仓库骨架：README/LICENSE/.gitignore + adapters/（pi 习惯书 v0.1）+ identity/（结构说明，live 不入库）+ docs/spike-runbook.md；身份层真身种子（2026-10-26 用户确认转正：live/{persona,values,goals,threads}.md 四件）。
+3. ✅ **管家 v0.1（2026-10-26 闭环）**：代谢链全接管——判重 scan（阈值 0.90）+ LLM 蒸馏提案（zai glm-5.3；首次闭环 2026-10-26：4 条里程碑→340 字全景稿，先删后存+失败回滚）+ 遗忘提案（归档≠降权≠删除）+ 审计日志 + 身份层提案流；触发=cron 三链（日巩固 02:00/夜备份 02:30/周扫描日 03:30 + 日蒸馏 03:15）；写入钩子 mnevo-session-write.ts 已验证（含 2026-10-26 首次真实产出；untagged 违例已加重文案修复）。
+4. ✅（2026-10-26）pi adapter 习惯书 v0.1 + 三工作区 AGENTS.md 接入；**WorkBuddy adapter 用户拍板跳过**（2026-10-26，暂不接入；adapter 优先级 pi→Claude Desktop，WorkBuddy 观察名单）。§14-6 随之降级：接入前再验。
+5. ✅ **记忆包 v0.1 + 备份双轨（2026-10-26）**：mnevo_pack.py export/import/verify（manifest sha256 完整性校验，tests 18/18）；work 区=s1 夜间 cron tar.gz 14 天轮转（不出公司基础设施✓红线）；personal 区=age 加密+GitHub 私有仓哑存储工具链就绪（scripts/mempack_remote_backup.sh，假包全链验证字节级一致；密钥 ~/.mnevo/keys/personal.agekey，私钥用户自行离线备份），personal 引擎上线即用。
+6. ✅ **验收双测试通过（2026-10-26，8 条小库）**：①导出往返不失真——export 8→清空→import 回 8/8、verify missing=0 extra=0、双 spot 检索命中正确条目；②冷启动接得住——全新 pi 会话仅靠检索三问全对（最近在忙什么/推进到哪/"继续上礼拜那件事"），引用原文、诚实标注歧义、不编造。已知边界：小库上通过，规模化后需复测（v0.2）。
 
 ### v0.2
 - PAM v1.0 映射器；分型衰减上线；mem0 OSS 作为二号引擎接入（验证可插拔性）；身份层内容精修。
@@ -320,6 +320,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 | Q25（2026-10-19 补课） | 两批调研落笔：§2 补厂商记忆层与 always-on 浪潮；记忆包 v0.2 双适配器（Claude 导出读入/Gemini 导入写出）；管家写入六问+审计四确认五字段+半自动定位；遗忘三操作（归档/降权/删除）；中国消费级 agent 不作记忆宿主；spike 判读用 Dreaming 四目标 | dot 之死（一个月导出窗）+Dots 黑箱争议反证“用户拥有+可检查”卖点；阿里 ai-agent-handbook 工程范式直接采 |
 | Q26（管家形态） | 自己搓确定性流水线（非 agent 循环）+ pi 只当确认面；LLM 点状结构化提案；不上编排框架/不嵌 SDK | 2026-10-23 用户三选一裁决；理由=审计可复现、宿主无关、供应链最小、v0.1 无自主工具循环需求 |
 | Q27（spike 判读） | 引擎=惰性 ADD-only（零代谢），代谢链全部由管家接管；LLM 蒸馏插槽从 v0.2 提前到 v0.1；写入习惯需机制性触发（建议性文本不生效） | 2026-10-26 判读：8 次巩固 compressed/forgotten 恒 0；v12 遗忘门槛≈永不遗忘；与 mem0 OSS ADD-only 互证 |
+| Q28（v0.1 收官） | v0.1 六任务全部关闭；验收双测试以灾备演练（清空重导入）+spot 检索+全新会话三问形式通过（小库上）；work 区备份留公司内轮转，personal 区 age+GitHub 工具链就绪待引擎；WorkBuddy 拍板跳过 | 2026-10-26 用户"按序推进+记录问题不堵塞"总指令下的收官；遗留问题清单=observations/v0.1-issues.md（本地） |
 
 ---
 
