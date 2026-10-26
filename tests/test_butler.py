@@ -30,6 +30,7 @@ LIB = {m["content_hash"]: m for m in (A, B, C)}
 
 class _EngineStub(BaseHTTPRequestHandler):
     deleted: list[str] = []
+    posted: list[dict] = []
 
     def _send(self, code: int, payload: dict):
         data = json.dumps(payload).encode("utf-8")
@@ -61,6 +62,9 @@ class _EngineStub(BaseHTTPRequestHandler):
                 results.append({"memory": m, "similarity_score": score})
             results.sort(key=lambda r: -r["similarity_score"])
             self._send(200, {"results": results[: body.get("limit", 5)]})
+        elif self.path == "/api/memories":
+            _EngineStub.posted.append(body)
+            self._send(200, {"success": True, "content_hash": "d" * 64})
         else:
             self._send(404, {"error": "not found"})
 
@@ -76,6 +80,7 @@ class _EngineStub(BaseHTTPRequestHandler):
 @pytest.fixture()
 def engine(tmp_path, monkeypatch):
     _EngineStub.deleted = []
+    _EngineStub.posted = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _EngineStub)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     monkeypatch.setenv(TOKEN_ENV, "stub-token")
@@ -129,3 +134,61 @@ def test_scan_after_delete_finds_nothing(engine):
         p.unlink()                        # 模拟归档已决提案
     engine.scan()                         # 库中只剩 A/C，无新提案
     assert list((engine.home / "proposals").glob("*.md")) == []
+
+
+# ---------------- distill ----------------
+
+def test_parse_llm_json_fenced_and_dirty():
+    fenced = ('前置噪声\n```json\n{"merges":[{"hashes":["a"],"content":"x"}],'
+              '"distills":[],"archives":[]}\n```\n后置噪声')
+    out = mb._parse_llm_json(fenced)
+    assert out["merges"][0]["hashes"] == ["a"]
+    with pytest.raises(ValueError):
+        mb._parse_llm_json("完全不是 JSON")
+    with pytest.raises(ValueError):
+        mb._parse_llm_json('{"merges":[{"hashes":[],"content":"x"}],'
+                           '"distills":[],"archives":[]}')
+
+
+def test_distill_skips_without_key(engine, monkeypatch):
+    monkeypatch.delenv("MNEVO_LLM_API_KEY", raising=False)
+    assert engine.distill() == 0
+    audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
+    assert '"skipped": "no_llm_key"' in audit
+
+
+def test_distill_proposal_and_apply(engine, monkeypatch):
+    monkeypatch.setenv("MNEVO_LLM_API_KEY", "test-key")
+    fake = ('```json\n{"merges":[{"hashes":["' + "a" * 64 + '","' + "b" * 64 + '"],'
+            + '"content":"上传接口联调结论（合并）：dev 环境 8080"}],'
+            + '"distills":[],"archives":[{"hash":"' + "c" * 64 + '",'
+            + '"reason":"一次性演示"}]}\n```')
+    monkeypatch.setattr(mb, "llm_chat", lambda *a, **k: fake)
+
+    assert engine.distill(all_memories=True) == 0
+    props = list((engine.home / "proposals").glob("*-distill.md"))
+    assert len(props) == 1
+    text = props[0].read_text(encoding="utf-8")
+    assert "action: apply-json" in text and "```json" in text
+    assert (engine.home / mb.Butler.STATE_FILE).is_file(), "蒸馏水位已落盘"
+    assert _EngineStub.posted == [], "提案阶段不得写引擎"
+
+    rc = engine.review_decide("distill", "accept")
+    assert rc == 0
+    assert sorted(_EngineStub.deleted) == sorted(["a" * 64, "b" * 64, "c" * 64])
+    assert len(_EngineStub.posted) == 1, "merge 存入一条新内容"
+    assert "distilled" in _EngineStub.posted[0]["tags"]
+    assert "status: accept" in props[0].read_text(encoding="utf-8")
+    audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
+    assert '"event": "apply-store"' in audit
+    assert '"event": "apply-done"' in audit
+
+
+def test_distill_review_dismiss_touches_nothing(engine, monkeypatch):
+    monkeypatch.setenv("MNEVO_LLM_API_KEY", "test-key")
+    fake = ('{"merges":[],"distills":[{"hashes":["' + "a" * 64 + '"],'
+            + '"content":"蒸馏稿","note":"测"}],"archives":[]}')
+    monkeypatch.setattr(mb, "llm_chat", lambda *a, **k: fake)
+    engine.distill(all_memories=True)
+    assert engine.review_decide("distill", "dismiss") == 0
+    assert _EngineStub.deleted == [] and _EngineStub.posted == []
