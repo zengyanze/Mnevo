@@ -247,7 +247,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 | 底座引擎 | mcp-memory-service | Apache-2.0；SQLite-vec 零配置；stdio/REST/Remote MCP+OAuth 全齐 |
 | Mnevo 语言 | Python | 与引擎生态一致;MCP SDK 成熟 |
 | embedding | 本地 bge-small 级 | CPU 可跑，VPS 友好 |
-| 蒸馏 LLM | 便宜云端模型（personal）/ 禁用（work，待政策） | 单次成本上限 ~¥0.5 |
+| 蒸馏 LLM | 便宜云端模型（两区；work 已放行 Q20），deepseek-chat 级 | 单次成本上限 ~¥0.5（实际单次几分钱） |
 | 许可 | Apache-2.0 | 专利授权，与依赖一致 |
 | 命名 | **Mnevo**：μνήμη 词根自造词 | 2026-10-14 用户确认定名；PyPI/npm/GitHub 已查近乎零碰撞 |
 
@@ -257,9 +257,9 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 
 ### v0.1（跑通"活着"的最小闭环）
 0. ✅ **查证（已完成，2026-10-14 用户确认）**：WorkBuddy **支持**自定义 MCP；公司对第三方 AI 工具**无限制**。
-1. **Spike 一周(公司开发服务器,runbook=docs/spike-runbook.md)**:装 mcp-memory-service(默认只绑 127.0.0.1),pi 经 SSH 隧道 + MCP/HTTP 接入;重点观察内置 consolidation(默认调度 daily 02:00 / weekly SUN 03:00 / monthly 1st 04:00,可 `POST /api/consolidation/trigger` 手动触发)--它是"合并代谢"还是"派生新增"(ADD-only 风险)?去重是否只靠手动 maintenance 脚本？→ 决定本仓库管家的接管范围。判读语言：对照 OpenAI Dreaming 四目标（carry forward / follow preferences / stay current / scalable）+“记住更多≠更好”（看记忆纠正与对照样本，不看条数增长）；
+1. ✅ **Spike 判读完成（2026-10-26，观察期 10-15→10-26）**：引擎=惰性 ADD-only——8 次自动巩固零失败但 processed 累计个位数、compressed/forgotten 恒 0，v12 遗忘门槛（relevance<0.1∧90 天∧365 天）在真实使用频率下≈永不遗忘；与 2025-12 官方实测（日增 349 派生）相反，小库上无派生、无合并、无遗忘，库呈线性积累。**检索/调度/稳定性全部合格**（bge 真语义含跨语言✅、8/8 夜跑零失败✅、12 天零崩溃✅）。结论：引擎当存储层用，**代谢链全部由管家接管**（见任务 3 与 Q27）；第二发现：写入习惯靠建议性文本不生效，需机制性触发（候选：pi 会话收尾钩子）；
 2. ✅（2026-10-14）仓库骨架：README/LICENSE/.gitignore + adapters/（pi 习惯书 v0.1）+ identity/（结构说明，live 不入库）+ docs/spike-runbook.md；身份层真身种子（从 pi 记忆提炼个人部分、剔除工作载荷→提案稿待人工确认）待补。
-3. 管家 v0.1：触发框架 + work 区夜间蒸馏（公司已放行外部 LLM，Q20；单次成本上限 ~¥0.5）+ 审计日志 + 身份层提案流；personal 区蒸馏随后跟进。
+3. **管家 v0.1（2026-10-26 判读后定稿）**：代谢链全接管——判重（scan 骨架已有，阈值 0.90 待真实数据校准）+ LLM 蒸馏提案（插槽从 v0.2 提前到 v0.1 必做；deepseek-chat 级，单次几条提案≈几分钱，¥0.5 上限数量级富余；公司已放行 Q20）+ 遗忘提案（提案式降权/归档，归档≠降权≠删除三操作纪律）+ 审计日志（butler audit 已就位）+ 身份层提案流；另有新依赖：写入习惯的机制性触发（pi 会话收尾钩子，判读第二发现）。触发框架已有（cron 日巩固/夜备份/周扫描三链）。
 4. pi adapter 习惯书（adapters/pi.md v0.1 已有）+ WorkBuddy 习惯书——接入前先查证 WorkBuddy 到公司服务器的网络可达性（§14-6）。adapter 优先级：pi → WorkBuddy → Claude Desktop（MCP 原生+记忆双向）。
 5. 记忆包 v0.1（版本化私有格式）+ age 加密备份 cron（personal 包→个人 GitHub 私有仓；work 包留在公司基础设施，不外流）。
 6. 执行验收测试（§13）。
@@ -288,7 +288,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 3. ✅ 查证完成(2026-10-14):**Engram 撞名成灾**(PyPI:engram-ms/engram-memory/engram-memory-system/engram-contextdb/engram-chateau,裸名也被无关项目占用;npm:engram-cli/engram-sdk/@cartisien/engram/@engram-ai-memory 等,其中 engram-ms/engram-cli/engram-sdk 与本项目同赛道);**备选 Hippo 也撞**(npm hippo-memory 同赛道"biologically-inspired memory...decay by default",PyPI 裸名被占,@juspay/hippocampus 2k dl/周)。本项目不发布 PyPI/npm 包,撞名实际成本 = 作品集可发现性 → 用户裁决换独特名(B);复查三个候选亦全部撞名(Anamnesis:anamnesis-memory 即 MCP 记忆服务器、oscardvs/anamnesis 自带 consolidation loop;Madeleine:撞 2026-10 新发同名 conversational-memory 论文;Mnema:GitHub 三个同赛道仓库)→ 唯一出路是自造词：**Mnevo**，查证仅撞一个 2018 年休眠无关项目——2026-10-14 用户确认定名；
 4. PAM 映射的字段对齐细节（v0.2）；
 5. 团队/家庭共享脑的 schema 口子（远期，不设计不承诺）。
-6. **WorkBuddy → 公司开发服务器的网络可达性**（WorkBuddy 是 SaaS 还是内网部署？能否访问公司服务器的 HTTPS+OAuth 端点——决定 Remote MCP 暴露方案：内网直连 or TLS 反代；查证前不暴露端口）；
+6. **WorkBuddy 接入路径（2026-10-23 降级为待验证的省事解）**：WorkBuddy 与 pi 同机，共用 SSH 隧道连 127.0.0.1:8000/mcp，服务器零暴露、OAuth 无限期延后。待验证三项见 adapters/workbuddy.md（Bearer header 支持/工具可见/agent 标识）。原“内网直连 or TLS 反代”仅在 WorkBuddy 不与 pi 同机时才需要；
 7. 离职/转岗时 work 区记忆在公司服务器上的归属与清理（用户侧知悉；记忆包导出能力即逃生舱）。
 
 ---
@@ -319,6 +319,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 | Q24（哲学锚点） | 愿景升级为“记忆→叙事自我→延展心智”（§0.4），但明确边界：不说自由意志/意识开端；延展的是用户的自我，不是机器的 | 2026-10-14 用户提出设想后共同细化；养料库=工作空间 research/（未入库） |
 | Q25（2026-10-19 补课） | 两批调研落笔：§2 补厂商记忆层与 always-on 浪潮；记忆包 v0.2 双适配器（Claude 导出读入/Gemini 导入写出）；管家写入六问+审计四确认五字段+半自动定位；遗忘三操作（归档/降权/删除）；中国消费级 agent 不作记忆宿主；spike 判读用 Dreaming 四目标 | dot 之死（一个月导出窗）+Dots 黑箱争议反证“用户拥有+可检查”卖点；阿里 ai-agent-handbook 工程范式直接采 |
 | Q26（管家形态） | 自己搓确定性流水线（非 agent 循环）+ pi 只当确认面；LLM 点状结构化提案；不上编排框架/不嵌 SDK | 2026-10-23 用户三选一裁决；理由=审计可复现、宿主无关、供应链最小、v0.1 无自主工具循环需求 |
+| Q27（spike 判读） | 引擎=惰性 ADD-only（零代谢），代谢链全部由管家接管；LLM 蒸馏插槽从 v0.2 提前到 v0.1；写入习惯需机制性触发（建议性文本不生效） | 2026-10-26 判读：8 次巩固 compressed/forgotten 恒 0；v12 遗忘门槛≈永不遗忘；与 mem0 OSS ADD-only 互证 |
 
 ---
 
