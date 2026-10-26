@@ -45,7 +45,7 @@ DEFAULT_LLM_MODEL = "glm-5.3"
 
 
 def llm_chat(base_url: str, api_key: str, model: str,
-             system: str, user: str, timeout: int = 120) -> str:
+             system: str, user: str, timeout: int = 300) -> str:
     """OpenAI 兼容 chat/completions 单次调用（zai glm 等）。失败抛 RuntimeError。"""
     status, body = http_json(
         f"{base_url.rstrip('/')}/chat/completions", api_key, method="POST",
@@ -91,6 +91,10 @@ def _parse_llm_json(text: str) -> dict:
                         or not all(isinstance(h, str) and h for h in hashes)
                         or not isinstance(content, str) or not content.strip()):
                     raise ValueError(f"{key} item needs non-empty hashes+content")
+                if len(content) > 600:
+                    raise ValueError(
+                        f"{key} content {len(content)} chars exceeds 600 "
+                        "(engine embedding fails on long text)")
             out[key].append(it)
     return out
 
@@ -245,6 +249,7 @@ class Butler:
             "以下是工作记忆库新增条目（hash 为唯一标识）：\n"
             + json.dumps(items, ensure_ascii=False, indent=1)
             + "\n\n请提案（拿不准就不提，宁缺毋滥）：\n"
+            "- 单条产出 content 预算 ≤400 字（引擎嵌入对超长文本会失败）；\n"
             "- merges：多条是同一事实的重复/变体 → 合成一条，保留全部事实细节；\n"
             "- distills：多条相关经历 → 蒸馏为一条更高层结论（保留日期/结论/位置指针，可弃过程细节）；\n"
             "- archives：过时/已被取代/一次性演示且无未来价值 → 建议归档（注意：归档即从库中删除，提案必须慎重）；\n"
@@ -389,37 +394,46 @@ class Butler:
         by_hash = {x["content_hash"]: x for x in
                    fetch_all_memories(self.url, self.token, self.store)}
         applied = failed = 0
+
+        def _delete(h: str) -> bool:
+            status, body = http_json(
+                f"{self.url}/api/memories/{h}", self.token, method="DELETE")
+            if status in (200, 202, 204):
+                return True
+            self.audit("apply-error", proposal=proposal_name, hash=h,
+                       note=f"HTTP {status}: {str(body)[:120]}")
+            return False
+
         for act in actions:
             kind, hashes = act["kind"], act.get("hashes") or []
             if kind in ("merge", "distill"):
-                tags = sorted({t for h in hashes if h in by_hash
-                               for t in (by_hash[h].get("tags") or [])} | {"distilled"})
+                # 先删后存：v12 写入带语义查重，蒸馏稿与源条天然相近，
+                # 先存会被 "Duplicate content detected" 拒掉（软删行不参与查重）
+                sources = [by_hash[h] for h in hashes if h in by_hash]
+                ok = sum(1 for h in hashes if h in by_hash and _delete(h))
+                tags = sorted({t for s in sources
+                               for t in (s.get("tags") or [])} | {"distilled"})
                 outcome, note = post_memory(
                     self.url, self.token,
                     {"content": act["content"], "tags": tags})
-                if outcome == "rejected":
-                    self.audit("apply-error", proposal=proposal_name,
-                               kind=kind, note=note)
-                    failed += 1
-                    continue
                 self.audit("apply-store", proposal=proposal_name,
                            kind=kind, outcome=outcome)
-            elif kind != "archive":
+                if outcome != "created":
+                    # 回滚：把刚删的源条原样存回，提案保留重试
+                    failed += 1
+                    for s in sources:
+                        r_outcome, _ = post_memory(self.url, self.token, s)
+                        self.audit("apply-restore", proposal=proposal_name,
+                                   hash=s["content_hash"], outcome=r_outcome)
+                    continue
+                applied += ok + 1
+            elif kind == "archive":
+                applied += sum(1 for h in hashes
+                               if h in by_hash and _delete(h))
+            else:
                 self.audit("apply-error", proposal=proposal_name,
                            kind=str(kind), note="unknown kind")
                 failed += 1
-                continue
-            for h in hashes:
-                if h not in by_hash:
-                    continue  # 已删（幂等重试）
-                status, body = http_json(
-                    f"{self.url}/api/memories/{h}", self.token, method="DELETE")
-                if status in (200, 202, 204):
-                    applied += 1
-                else:
-                    failed += 1
-                    self.audit("apply-error", proposal=proposal_name, hash=h,
-                               note=f"HTTP {status}: {str(body)[:120]}")
         return applied, failed
 
     def review_decide(self, prefix: str, decision: str) -> int:

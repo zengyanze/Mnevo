@@ -31,6 +31,8 @@ LIB = {m["content_hash"]: m for m in (A, B, C)}
 class _EngineStub(BaseHTTPRequestHandler):
     deleted: list[str] = []
     posted: list[dict] = []
+    events: list[tuple] = []          # ("post", 内容前20) / ("delete", hash) 时序
+    post_replies: list[dict] = []     # 队列；空则默认 {"success": True}
 
     def _send(self, code: int, payload: dict):
         data = json.dumps(payload).encode("utf-8")
@@ -64,13 +66,17 @@ class _EngineStub(BaseHTTPRequestHandler):
             self._send(200, {"results": results[: body.get("limit", 5)]})
         elif self.path == "/api/memories":
             _EngineStub.posted.append(body)
-            self._send(200, {"success": True, "content_hash": "d" * 64})
+            _EngineStub.events.append(("post", body.get("content", "")[:20]))
+            reply = (_EngineStub.post_replies.pop(0)
+                     if _EngineStub.post_replies else {"success": True})
+            self._send(200, reply)
         else:
             self._send(404, {"error": "not found"})
 
     def do_DELETE(self):
         h = self.path.rsplit("/", 1)[-1]
         _EngineStub.deleted.append(h)
+        _EngineStub.events.append(("delete", h))
         self._send(200, {"success": True})
 
     def log_message(self, *args):
@@ -81,6 +87,8 @@ class _EngineStub(BaseHTTPRequestHandler):
 def engine(tmp_path, monkeypatch):
     _EngineStub.deleted = []
     _EngineStub.posted = []
+    _EngineStub.events = []
+    _EngineStub.post_replies = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _EngineStub)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     monkeypatch.setenv(TOKEN_ENV, "stub-token")
@@ -178,10 +186,62 @@ def test_distill_proposal_and_apply(engine, monkeypatch):
     assert sorted(_EngineStub.deleted) == sorted(["a" * 64, "b" * 64, "c" * 64])
     assert len(_EngineStub.posted) == 1, "merge 存入一条新内容"
     assert "distilled" in _EngineStub.posted[0]["tags"]
+    # 先删后存：删源条必须发生在存蒸馏稿之前（v12 语义查重会拒活源的近义稿）
+    kinds = [e[0] for e in _EngineStub.events]
+    assert kinds.index("post") > max(
+        i for i, e in enumerate(_EngineStub.events)
+        if e[0] == "delete" and e[1] in ("a" * 64, "b" * 64))
     assert "status: accept" in props[0].read_text(encoding="utf-8")
     audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
     assert '"event": "apply-store"' in audit
     assert '"event": "apply-done"' in audit
+
+
+def test_apply_rolls_back_on_semantic_duplicate(engine, monkeypatch):
+    """v12 语义查重拒存蒸馏稿（200+success:false）→回滚源条+提案留 open。"""
+    monkeypatch.setenv("MNEVO_LLM_API_KEY", "test-key")
+    fake = ('{"merges":[{"hashes":["' + "a" * 64 + '","' + "b" * 64 + '"],'
+            + '"content":"合并稿"}],"distills":[],"archives":[]}')
+    monkeypatch.setattr(mb, "llm_chat", lambda *a, **k: fake)
+    _EngineStub.post_replies = [
+        {"success": False,
+         "message": "Duplicate content detected (semantically similar to x)"}]
+    engine.distill(all_memories=True)
+
+    rc = engine.review_decide("distill", "accept")
+    assert rc == 2, "失败必须返 2 且提案留 open"
+    assert sorted(_EngineStub.deleted) == sorted(["a" * 64, "b" * 64])
+    contents = [p["content"] for p in _EngineStub.posted]
+    assert contents[0] == "合并稿"
+    assert contents[1:] == [A["content"], B["content"]], "源条已回滚存回"
+    audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
+    assert '"event": "apply-restore"' in audit
+    props = list((engine.home / "proposals").glob("*-distill.md"))
+    assert "status: open" in props[0].read_text(encoding="utf-8")
+
+
+def test_post_memory_classifies_v12_semantic_dup(engine):
+    _EngineStub.post_replies = [
+        {"success": False,
+         "message": "Duplicate content detected (semantically similar to x)"}]
+    outcome, _ = mb.post_memory(engine.url, "t", A)
+    assert outcome == "duplicate"
+
+
+def test_post_memory_classifies_embed_failure(engine):
+    """v12 嵌入失败也包成 200+success:false，但不是 duplicate。"""
+    _EngineStub.post_replies = [
+        {"success": False,
+         "message": "Failed to store memory: Failed to generate embedding: "
+                   "[ONNXRuntimeError] : 1 : FAIL"}]
+    outcome, _ = mb.post_memory(engine.url, "t", A)
+    assert outcome == "rejected"
+
+
+def test_parse_llm_json_rejects_long_content():
+    with pytest.raises(ValueError):
+        mb._parse_llm_json('{"merges":[{"hashes":["a"],"content":"'
+                           + "长" * 601 + '"}],"distills":[],"archives":[]}')
 
 
 def test_distill_review_dismiss_touches_nothing(engine, monkeypatch):

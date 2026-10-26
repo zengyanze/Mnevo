@@ -213,6 +213,12 @@ def post_memory(base_url: str, token: str, row: dict,
     )
     text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
     if status in (200, 201):
+        # v12 语义查重：HTTP 200 + success:false + "Duplicate content detected"
+        if "duplicate" in text.lower() or "exist" in text.lower():
+            return "duplicate", text[:200]
+        # v12 把存储/嵌入失败包成 HTTP 200 + success:false
+        if isinstance(body, dict) and body.get("success") is False:
+            return "rejected", text[:200]
         return "created", text[:200]
     if status in (409, 422) or "exist" in text.lower() or "duplicate" in text.lower():
         return "duplicate", text[:200]
