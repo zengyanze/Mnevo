@@ -189,3 +189,63 @@ def test_import_passes_store_field(monkeypatch):
                                 store="acceptance")
     assert outcome == "created"
     assert captured["body"]["store"] == "acceptance"
+
+
+# ---------- PAM v1.0 映射 ----------
+
+def _load_pack_module():
+    from pathlib import Path as _P
+    spec = importlib.util.spec_from_file_location(
+        "mnevo_pack", _P(__file__).resolve().parents[1] / "scripts" / "mnevo_pack.py")
+    mp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mp)
+    return mp
+
+
+def test_pam_normalize_and_hash():
+    mp = _load_pack_module()
+    assert mp.pam_normalize("  Hello   WORLD  ") == "hello world"
+    assert mp.pam_content_hash("AbC  d") == mp.pam_content_hash("abc d")
+    assert mp.pam_content_hash("x").startswith("sha256:")
+
+
+def test_pam_tag_sanitize():
+    mp = _load_pack_module()
+    out = mp._pam_tags(["Work", "agent:pi", "agent:pi", "_bad", "中文"])
+    assert out == ["work", "agent-pi"]
+
+
+def test_to_pam_roundtrip(tmp_path):
+    mp = _load_pack_module()
+    rows = [
+        {"content": "记忆一 content", "content_hash": "h1",
+         "tags": ["work", "skill"], "memory_type": None,
+         "created_at_iso": "2026-10-26T10:00:00Z", "updated_at_iso": None},
+        {"content": "memory two", "content_hash": "h2",
+         "tags": ["agent:pi"], "memory_type": None,
+         "created_at_iso": "2026-10-26T11:00:00Z", "updated_at_iso": None},
+    ]
+    mp.write_pack(tmp_path / "pack", rows, [], "work", "test")
+    store = mp.build_pam_store(rows, "work", export_id="id-1")
+    assert store["schema"] == "portable-ai-memory"
+    assert store["integrity"]["total_memories"] == 2
+    # type 映射：含 skill tag 的条目应为 skill
+    by_content = {m["content"]: m for m in store["memories"]}
+    assert by_content["记忆一 content"]["type"] == "skill"
+    assert by_content["memory two"]["tags"] == ["agent-pi"]
+    # 写盘读回：校验和通过
+    mp.write_pam(store, tmp_path / "pam")
+    store2, mems = mp.read_pam(tmp_path / "pam")
+    assert len(mems) == 2
+    # 逆向：active 条目回 rows，内容/标签保真
+    back = mp.pam_to_rows(mems)
+    assert {r["content"] for r in back} == {"记忆一 content", "memory two"}
+    # 篡改检测
+    store3 = json.loads(json.dumps(store))
+    store3["memories"][0]["content"] = "tampered"
+    mp.write_pam(store3, tmp_path / "pam3")
+    try:
+        mp.read_pam(tmp_path / "pam3")
+        assert False, "should raise"
+    except ValueError as e:
+        assert "integrity failure" in str(e)

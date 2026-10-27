@@ -27,11 +27,14 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tarfile
+import unicodedata
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -231,6 +234,167 @@ def post_memory(base_url: str, token: str, row: dict,
     return "rejected", f"HTTP {status}: {text[:200]}"
 
 
+# ---------- PAM v1.0（Portable AI Memory）映射 ----------
+# 规范：https://portable-ai-memory.org/spec/v1.0/（2026-02-17，CC BY 4.0）
+PAM_SPEC_URI = "https://portable-ai-memory.org/spec/v1.0/"
+PAM_TOOL_ID = "mnevo_pack/0.2.0"  # spec 要求 system/semver 格式
+PAM_TYPE_BY_TAG = {"identity": "identity", "skill": "skill", "goal": "goal",
+                   "preference": "preference", "fact": "fact"}
+
+
+def pam_normalize(text: str) -> str:
+    """PAM §6.1：trim → 小写 → NFC → 折叠连续空白。"""
+    return unicodedata.normalize("NFC", " ".join(text.strip().lower().split()))
+
+
+def pam_content_hash(text: str) -> str:
+    return "sha256:" + hashlib.sha256(
+        pam_normalize(text).encode("utf-8")).hexdigest()
+
+
+def _pam_tags(tags: list) -> list[str]:
+    """清洗为 ^[a-z0-9][a-z0-9_-]*$（PAM tag 模式），去重保序。"""
+    out: list[str] = []
+    for t in tags or []:
+        t = str(t).lower().strip().replace(":", "-").replace(" ", "-")
+        if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", t) and t not in out:
+            out.append(t)
+    return out
+
+
+def _jcs_dumps(obj) -> str:
+    """RFC 8785 子集：递归字典键排序+无空白+最小转义。
+    本实现只保证无浮点、ASCII 键的对象（我们自产的 store 恰好如此）。
+    遇浮点直接拒（ES6 数字序列化不做近似）。"""
+    def walk(v):
+        if isinstance(v, dict):
+            return {k: walk(v[k]) for k in sorted(v)}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, float):
+            raise ValueError("JCS subset: floats not supported")
+        return v
+    return json.dumps(walk(obj), ensure_ascii=False, separators=(",", ":"),
+                       allow_nan=False)
+
+
+def build_pam_store(rows: list[dict], namespace: str,
+                    export_id: str | None = None) -> dict:
+    """mempack rows -> PAM memory-store 文档。
+    id 用 uuid5(URL-ns, 'mnevo:'+engine_hash)：确定性，重导出幂等。
+    （spec 说 SHOULD uuid4；确定性优先，偏差在此注记。）"""
+    memories = []
+    for r in rows:
+        tags = _pam_tags(r.get("tags") or [])
+        hit = next((t for t in tags if t in PAM_TYPE_BY_TAG), "")
+        memories.append({
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "mnevo:" + r["content_hash"])),
+            "type": PAM_TYPE_BY_TAG.get(hit, "context"),
+            "status": "active",
+            "content": r["content"],
+            "content_hash": pam_content_hash(r["content"]),
+            "tags": tags,
+            "temporal": {
+                "created_at": r.get("created_at_iso") or _now_iso(),
+                "updated_at": r.get("updated_at_iso"),
+            },
+            "provenance": {
+                "platform": "mnevo",
+                "platform_user_id": namespace,
+                "extraction_method": "api_export",
+                "extractor": PAM_TOOL_ID,
+            },
+        })
+    memories.sort(key=lambda m: m["id"])
+    return {
+        "schema": "portable-ai-memory",
+        "schema_version": "1.0",
+        "spec_uri": PAM_SPEC_URI,
+        "export_id": export_id or str(uuid.uuid4()),
+        "exported_by": PAM_TOOL_ID,
+        "export_date": _now_iso(),
+        "export_type": "full",
+        "owner": {"id": f"urn:mnevo:{namespace}"},
+        "memories": memories,
+        "relations": [],
+        "integrity": {
+            "canonicalization": "RFC8785",
+            "checksum": "sha256:" + hashlib.sha256(
+                _jcs_dumps(memories).encode("utf-8")).hexdigest(),
+            "total_memories": len(memories),
+        },
+    }
+
+
+def write_pam(store: dict, out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "memory-store.json").write_text(
+        json.dumps(store, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def read_pam(pam_dir: Path) -> tuple[dict, list[dict]]:
+    store = json.loads(
+        (pam_dir / "memory-store.json").read_text(encoding="utf-8"))
+    if store.get("schema") != "portable-ai-memory":
+        raise ValueError("not a PAM store")
+    mems = store.get("memories", [])
+    integ = store.get("integrity") or {}
+    total = integ.get("total_memories")
+    if isinstance(total, int) and total != len(mems):
+        raise ValueError(
+            f"integrity failure: total_memories {total} != {len(mems)}")
+    if integ.get("checksum"):
+        try:
+            calc = "sha256:" + hashlib.sha256(_jcs_dumps(
+                sorted(mems, key=lambda m: m["id"])).encode("utf-8")).hexdigest()
+            if calc != integ["checksum"]:
+                raise ValueError("integrity failure: checksum mismatch")
+        except ValueError as e:
+            if "floats" in str(e):
+                print("warn: 外来 PAM 含浮点字段，JCS 校验跳过（子集实现限制）")
+            else:
+                raise
+    return store, mems
+
+
+def pam_to_rows(mems: list[dict]) -> list[dict]:
+    """PAM memories -> mempack rows（仅 active；hash 重算为引擎口径）。"""
+    rows = []
+    for m in mems:
+        if m.get("status") not in (None, "active"):
+            continue
+        content = m["content"]
+        rows.append({
+            "content": content,
+            "content_hash": hashlib.sha256(
+                content.encode("utf-8")).hexdigest(),
+            "tags": _pam_tags(m.get("tags") or []),
+            "memory_type": None if m.get("type") in (None, "custom") else m["type"],
+            "created_at_iso": (m.get("temporal") or {}).get("created_at"),
+            "updated_at_iso": (m.get("temporal") or {}).get("updated_at"),
+        })
+    return rows
+
+
+def cmd_to_pam(args: argparse.Namespace) -> int:
+    manifest, rows = read_pack(Path(args.pack))
+    store = build_pam_store(rows, manifest.get("namespace", "work"))
+    write_pam(store, Path(args.out))
+    print(f"pam export: {len(store['memories'])} memories -> "
+          f"{args.out}/memory-store.json "
+          f"(checksum {store['integrity']['checksum'][:23]}…)")
+    return 0
+
+
+def cmd_from_pam(args: argparse.Namespace) -> int:
+    store, mems = read_pam(Path(args.pam))
+    rows = pam_to_rows(mems)
+    write_pack(Path(args.out), rows, [],
+               store.get("owner", {}).get("id", "pam"), "pam-import")
+    print(f"pam import: {len(rows)} active memories -> {args.out}")
+    return 0
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     token = os.environ.get(args.token_env, "")
     if not token:
@@ -339,6 +503,18 @@ def main(argv: list[str] | None = None) -> int:
     p_verify.add_argument("--pack", required=True)
     p_verify.add_argument("--against-engine", action="store_true")
     p_verify.set_defaults(func=cmd_verify)
+
+    p_to = sub.add_parser("to-pam", parents=[common],
+                          help="mempack -> PAM v1.0 目录（导出兼容社区标准）")
+    p_to.add_argument("--pack", required=True)
+    p_to.add_argument("--out", required=True)
+    p_to.set_defaults(func=cmd_to_pam)
+
+    p_from = sub.add_parser("from-pam", parents=[common],
+                            help="PAM v1.0 目录 -> mempack（跨系统迁入）")
+    p_from.add_argument("--pam", required=True)
+    p_from.add_argument("--out", required=True)
+    p_from.set_defaults(func=cmd_from_pam)
 
     args = parser.parse_args(argv)
     for name, dv in (("url", "http://127.0.0.1:8000"),

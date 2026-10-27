@@ -264,8 +264,15 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 5. ✅ **记忆包 v0.1 + 备份双轨（2026-10-26）**：mnevo_pack.py export/import/verify（manifest sha256 完整性校验，tests 18/18）；work 区=s1 夜间 cron tar.gz 14 天轮转（不出公司基础设施✓红线）；personal 区=age 加密+GitHub 私有仓哑存储工具链就绪（scripts/mempack_remote_backup.sh，假包全链验证字节级一致；密钥 ~/.mnevo/keys/personal.agekey，私钥用户自行离线备份），personal 引擎上线即用。
 6. ✅ **验收双测试通过（2026-10-26，8 条小库）**：①导出往返不失真——export 8→清空→import 回 8/8、verify missing=0 extra=0、双 spot 检索命中正确条目；②冷启动接得住——全新 pi 会话仅靠检索三问全对（最近在忙什么/推进到哪/"继续上礼拜那件事"），引用原文、诚实标注歧义、不编造。已知边界：小库上通过，规模化后需复测（v0.2）。
 
-### v0.2
-- PAM v1.0 映射器；分型衰减上线；mem0 OSS 作为二号引擎接入（验证可插拔性）；身份层内容精修。
+### v0.2（可携带性+代谢成型）
+1. **PAM v1.0 标准细读+映射器**：spec 调研 → mempack v1 ↔ PAM v1.0 双向转换器（导出兼容社区标准，不宣称取代）；
+2. **真实端点双适配器**：Claude 记忆导出格式（读入）/ Gemini 记忆导入格式（写出）——先实测两端真实格式再定 schema 映射；
+3. **分型衰减上线**：pack schema v2 预留 valid_from/valid_to/supersedes 字段；butler 衰减提案路径真跑（仅 episode 遗忘曲线+访问强化；fact supersede 失效；skill 验证维护；身份层永不）；
+4. **mem0 OSS 二号引擎接入**：同引擎接口约束（MCP/REST、绝不 import 内部）部署第二实例 → 同 pack 双引擎往返验证可插拔；
+5. **身份层精修+冷启动注入**：四件内容送代（用户主导+butler 提案流）；get_bootstrap_profile 面向 pi 会话注入；
+6. **运行期数据驱动项**：判重阈值 0.90 校准、遗忘提案真实触发、规模化（数百条）检索/蒸馏复测。
+
+> 依赖用户基础设施/决策：personal 区引擎部署（VPS，§9.1）不阻塞以上任何一项。
 
 ### v0.3
 - 可视化看板（recent/编辑/审计日志浏览）；Graphiti 底座评估（时间性谱系全量语义）；WorkBuddy 接入（若查证通过）；导出分级脱敏。

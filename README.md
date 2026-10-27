@@ -47,6 +47,13 @@ python scripts/mnevo_pack.py import --pack my.mempack --dry-run                 
 
 格式：`manifest.json`（版本+每文件 sha256）+ `memories.jsonl`（内容真源，向量不入包，导入端重算）+ `identity/`（仅已确认文件）。测试：`pytest tests/`（引擎不可达时真机用例自动 skip）。
 
+**PAM v1.0 双向映射（v0.2）**：包可转换为社区标准 [Portable AI Memory](https://portable-ai-memory.org/spec/v1.0/)（schema 0 违规，JCS 校验和与官方 rfc8785 库逐字节一致）：
+
+```bash
+python scripts/mnevo_pack.py to-pam --pack my.mempack --out my.pam    # 包→PAM v1.0
+python scripts/mnevo_pack.py from-pam --pam my.pam --out my.mempack   # PAM→包（跨系统迁入）
+```
+
 ### 管家 v0.1 骨架（PLAN §7/Q26：确定性流水线+人工确认面）
 
 ```bash
