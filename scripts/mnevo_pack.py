@@ -471,6 +471,218 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0 if not missing else 1
 
 
+# ------------------------------------------------- Claude 导出读入（v0.2）
+
+CLAUDE_CHUNK_LIMIT = 450  # 引擎 ONNX 嵌入实测上限 ~500 字，留余量
+
+
+def _find_zip_entry(zf, suffix: str) -> str | None:
+    """zip 内按后缀找文件（官方导出可能嵌套在子目录）。"""
+    for name in zf.namelist():
+        if name.endswith(suffix) and not name.endswith("/"):
+            return name
+    return None
+
+
+def _split_long(text: str, limit: int = CLAUDE_CHUNK_LIMIT) -> list[str]:
+    """超长内容切分：段落贪心打包，单段超限再按句/字符硬切。"""
+    if len(text) <= limit:
+        return [text]
+    paras = [p for p in (s.strip() for s in text.split("\n\n")) if p]
+    chunks: list[str] = []
+    cur = ""
+    for p in paras:
+        candidate = f"{cur}\n\n{p}".strip() if cur else p
+        if len(candidate) <= limit or not cur:
+            cur = candidate
+        else:
+            chunks.append(cur)
+            cur = p
+    if cur:
+        chunks.append(cur)
+    # 单段仍超限 → 按句号硬切
+    out: list[str] = []
+    for c in chunks:
+        while len(c) > limit:
+            cut = c.rfind("。", 0, limit)
+            cut2 = c.rfind(". ", 0, limit)
+            cut = max(cut, cut2)
+            if cut < limit // 2:
+                cut = limit
+            out.append(c[:cut].strip())
+            c = c[cut:].strip()
+        if c:
+            out.append(c)
+    return out
+
+
+def parse_claude_export(source: Path) -> tuple[list[dict], dict]:
+    """读 Claude 数据导出（zip 或裸 memories.json）→ (rows, stats)。
+
+    三代格式全兼容（依据官方导出 + 社区解析器实证 2026-10）：
+      3. memory_files: [{path, content, updated_at}]（markdown 文件夹制）
+      2. conversations_memory: str（旧版摘要）
+      1. project_memories: {project-uuid: str}（项目名经 projects.json 解析）
+    超长文件按段落切块（引擎嵌入上限）；块序号保序，全文无损。
+    """
+    import zipfile
+
+    project_names: dict[str, str] = {}
+    mem_obj: dict | None = None
+    if source.suffix.lower() == ".zip":
+        with zipfile.ZipFile(source) as zf:
+            proj_entry = _find_zip_entry(zf, "projects.json")
+            if proj_entry:
+                projects = json.loads(zf.read(proj_entry).decode("utf-8"))
+                project_names = {
+                    p.get("uuid", ""): p.get("name", "")
+                    for p in projects if isinstance(p, dict)
+                }
+            mem_entry = _find_zip_entry(zf, "memories.json")
+            if mem_entry:
+                data = json.loads(zf.read(mem_entry).decode("utf-8"))
+                if isinstance(data, list) and data and isinstance(data[0], dict):
+                    mem_obj = data[0]
+    elif source.is_file():
+        data = json.loads(source.read_text(encoding="utf-8"))
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            mem_obj = data[0]
+
+    rows: list[dict] = []
+    stats = {"source": str(source), "memory_files": 0, "chunks": 0,
+             "legacy": 0, "projects": 0, "project_names": 0}
+    if not mem_obj:
+        return rows, stats
+
+    def add_rows(content: str, tags: list[str], updated: str | None) -> None:
+        parts = _split_long(content)
+        n = len(parts)
+        for i, chunk in enumerate(parts, start=1):
+            body = chunk if n == 1 else f"[part {i}/{n}]\n{chunk}"
+            rows.append({
+                "content": body,
+                "content_hash": hashlib.sha256(
+                    body.encode("utf-8")).hexdigest(),
+                "tags": tags,
+                "memory_type": None,
+                "created_at_iso": updated,
+                "updated_at_iso": updated,
+            })
+
+    for f in mem_obj.get("memory_files") or []:
+        if not isinstance(f, dict):
+            continue
+        content = (f.get("content") or "").strip()
+        if not content:
+            continue
+        path = f.get("path") or ""
+        name = path.rstrip("/").rpartition("/")[2] or path or "memory"
+        stats["memory_files"] += 1
+        add_rows(content, ["claude", f"claude-file:{name}"],
+                 f.get("updated_at"))
+    stats["chunks"] = len(rows)
+
+    legacy = (mem_obj.get("conversations_memory") or "").strip()
+    if legacy:
+        stats["legacy"] = 1
+        add_rows(legacy, ["claude", "claude:conversations-memory"], None)
+
+    for pid, text in (mem_obj.get("project_memories") or {}).items():
+        if not (isinstance(text, str) and text.strip()):
+            continue
+        pname = project_names.get(pid) or pid or "unknown"
+        if project_names.get(pid):
+            stats["project_names"] += 1
+        stats["projects"] += 1
+        add_rows(text, ["claude", f"claude-project:{pname}"], None)
+    return rows, stats
+
+
+def cmd_from_claude(args: argparse.Namespace) -> int:
+    rows, stats = parse_claude_export(Path(args.claude))
+    if not rows:
+        print(f"no memories found in {args.claude} "
+              f"(memories.json 缺失或为空)", file=sys.stderr)
+        return 1
+    out = write_pack(Path(args.out), rows, [], args.namespace,
+                     "claude.ai-export")
+    print(f"claude -> mempack: {out}")
+    print(f"  memory_files={stats['memory_files']} (rows={stats['chunks']}, "
+          f"超长已切块) legacy={stats['legacy']} "
+          f"projects={stats['projects']} (resolved names={stats['project_names']})")
+    print(f"  后续: import --pack {out} 入库 / to-pam 转社区标准")
+    return 0
+
+
+# ------------------------------------------------- Gemini 写出（v0.2）
+
+GEMINI_TYPE_SECTIONS = (
+    ("identity", "Who I am"),
+    ("preference", "Preferences"),
+    ("fact", "Facts about me"),
+    ("goal", "Current goals"),
+    ("skill", "Skills & how I work"),
+)
+GEMINI_IDENTITY_SECTIONS = (
+    ("persona.md", "Who I am"),
+    ("values.md", "What I value"),
+    ("goals.md", "Current goals"),
+    ("threads.md", "What I'm working on"),
+)
+
+
+def build_gemini_text(rows: list[dict], identity_texts: dict[str, str]) -> str:
+    """构造 Gemini import-memory 粘贴文本（官方路径=无 schema 纯文本）。"""
+    lines: list[str] = [
+        "# About me",
+        "",
+        f"(memory import, generated {_now_iso()[:10]} from my Mnevo memory pack)",
+        "",
+    ]
+    for name, section in GEMINI_IDENTITY_SECTIONS:
+        text = (identity_texts.get(name) or "").strip()
+        if text:
+            lines += [f"## {section}", "", text.strip(), ""]
+    for mtype, section in GEMINI_TYPE_SECTIONS:
+        items = [r for r in rows if r.get("memory_type") == mtype]
+        if not items:
+            continue
+        lines += [f"## {section}", ""]
+        for r in items:
+            item = r["content"].strip().replace("\n", " ")
+            lines.append(f"- {item}")
+        lines.append("")
+    rest = [r for r in rows
+            if r.get("memory_type") not in
+            {t for t, _ in GEMINI_TYPE_SECTIONS}]
+    if rest:
+        lines += ["## Notes", ""]
+        for r in rest:
+            item = r["content"].strip().replace("\n", " ")
+            lines.append(f"- {item}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def cmd_to_gemini(args: argparse.Namespace) -> int:
+    pack = Path(args.pack)
+    manifest, rows = read_pack(pack)
+    identity_texts = {}
+    for name, _ in GEMINI_IDENTITY_SECTIONS:
+        p = pack / "identity" / name
+        if p.is_file():
+            identity_texts[name] = p.read_text(encoding="utf-8")
+    text = build_gemini_text(rows, identity_texts)
+    out = Path(args.out)
+    out.write_text(text, encoding="utf-8")
+    typed = sum(1 for r in rows if r.get("memory_type") in
+                {t for t, _ in GEMINI_TYPE_SECTIONS})
+    print(f"gemini paste text: {out} ({len(text)} chars)")
+    print(f"  rows={len(rows)} typed={typed} identity_files={len(identity_texts)}")
+    print("  用法: gemini.google/import-memory → Paste into Gemini")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):  # Windows 控制台防 GBK 乱码
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -515,6 +727,20 @@ def main(argv: list[str] | None = None) -> int:
     p_from.add_argument("--pam", required=True)
     p_from.add_argument("--out", required=True)
     p_from.set_defaults(func=cmd_from_pam)
+
+    p_fc = sub.add_parser("from-claude", parents=[common],
+                          help="Claude 数据导出(zip/memories.json) -> mempack")
+    p_fc.add_argument("--claude", required=True,
+                      help="claude 导出 zip 或裸 memories.json")
+    p_fc.add_argument("--out", required=True)
+    p_fc.add_argument("--namespace", default="personal")
+    p_fc.set_defaults(func=cmd_from_claude)
+
+    p_tg = sub.add_parser("to-gemini", parents=[common],
+                          help="mempack -> Gemini import-memory 粘贴文本")
+    p_tg.add_argument("--pack", required=True)
+    p_tg.add_argument("--out", required=True)
+    p_tg.set_defaults(func=cmd_to_gemini)
 
     args = parser.parse_args(argv)
     for name, dv in (("url", "http://127.0.0.1:8000"),

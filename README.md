@@ -54,6 +54,13 @@ python scripts/mnevo_pack.py to-pam --pack my.mempack --out my.pam    # 包→PA
 python scripts/mnevo_pack.py from-pam --pam my.pam --out my.mempack   # PAM→包（跨系统迁入）
 ```
 
+**厂商记忆互操作（v0.2）**：吸收 Claude 导出（三代格式全兼容：markdown 文件夹制/旧版摘要/项目记忆），产出 Gemini 官方 import-memory 路径要的粘贴文本：
+
+```bash
+python scripts/mnevo_pack.py from-claude --claude export.zip --out claude.mempack   # Claude 导出→包
+python scripts/mnevo_pack.py to-gemini --pack my.mempack --out gemini.md            # 包→Gemini 粘贴文本
+```
+
 ### 管家 v0.1 骨架（PLAN §7/Q26：确定性流水线+人工确认面）
 
 ```bash

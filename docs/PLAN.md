@@ -265,8 +265,8 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 6. ✅ **验收双测试通过（2026-10-26，8 条小库）**：①导出往返不失真——export 8→清空→import 回 8/8、verify missing=0 extra=0、双 spot 检索命中正确条目；②冷启动接得住——全新 pi 会话仅靠检索三问全对（最近在忙什么/推进到哪/"继续上礼拜那件事"），引用原文、诚实标注歧义、不编造。已知边界：小库上通过，规模化后需复测（v0.2）。
 
 ### v0.2（可携带性+代谢成型）
-1. **PAM v1.0 标准细读+映射器**：spec 调研 → mempack v1 ↔ PAM v1.0 双向转换器（导出兼容社区标准，不宣称取代）；
-2. **真实端点双适配器**：Claude 记忆导出格式（读入）/ Gemini 记忆导入格式（写出）——先实测两端真实格式再定 schema 映射；
+1. ✅ **PAM v1.0 标准细读+映射器**（2026-10-27）：mempack v1 ↔ PAM v1.0 双向转换器；官方 schema 校验 0 违规+JCS 校验和与官方 rfc8785 库逐字节一致（tests 25/25）；
+2. ✅ **真实端点双适配器**（2026-10-27）：`from-claude`（实测三代格式：memory_files markdown 文件夹制 [path/content/updated_at]+conversations_memory 旧摘要+project_memories 经 projects.json 解名；zip 嵌套目录按后缀找；超长按引擎嵌入上限～500 字切块无损）+ `to-gemini`（官方 import-memory 路径=无 schema 粘贴文本，按 memory_type 分节+身份层附入）；格式依据=官方导出解析器逆向+memoryplugin 页面 JS 内嵌样本实证；
 3. **分型衰减上线**：pack schema v2 预留 valid_from/valid_to/supersedes 字段；butler 衰减提案路径真跑（仅 episode 遗忘曲线+访问强化；fact supersede 失效；skill 验证维护；身份层永不）；
 4. **mem0 OSS 二号引擎接入**：同引擎接口约束（MCP/REST、绝不 import 内部）部署第二实例 → 同 pack 双引擎往返验证可插拔；
 5. **身份层精修+冷启动注入**：四件内容送代（用户主导+butler 提案流）；get_bootstrap_profile 面向 pi 会话注入；

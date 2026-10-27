@@ -249,3 +249,108 @@ def test_to_pam_roundtrip(tmp_path):
         assert False, "should raise"
     except ValueError as e:
         assert "integrity failure" in str(e)
+
+
+# ---------------------------------------------- from-claude / to-gemini（v0.2）
+
+
+def _claude_zip(tmp: Path, nested: bool = False) -> Path:
+    """构造三代格式合体的 Claude 导出 zip（含嵌套目录选项）。"""
+    import zipfile
+    memories = [{
+        "account_uuid": "acc-1",
+        "memory_files": [
+            {"path": "/profile.md", "content": "Sam, 31, pediatric nurse.",
+             "updated_at": "2026-08-01T10:12:00Z"},
+            {"path": "/people/jane.md",
+             "content": "段落一。\n\n" + ("很长的记忆。" * 120) + "\n\n段落末尾。",
+             "updated_at": "2026-08-02T10:12:00Z"},
+        ],
+        "conversations_memory": "User prefers concise answers.",
+        "project_memories": {"p1": "项目 p1 的记忆。"},
+    }]
+    projects = [{"uuid": "p1", "name": "My Project"}]
+    zp = tmp / "claude-export.zip"
+    prefix = "data/" if nested else ""
+    with zipfile.ZipFile(zp, "w") as zf:
+        zf.writestr(f"{prefix}memories.json", json.dumps(memories))
+        zf.writestr(f"{prefix}projects.json", json.dumps(projects))
+    return zp
+
+
+def test_from_claude_zip(tmp_path):
+    rows, stats = mp.parse_claude_export(_claude_zip(tmp_path))
+    assert stats["memory_files"] == 2 and stats["legacy"] == 1
+    assert stats["projects"] == 1 and stats["project_names"] == 1
+    # 短文件 1 行；长文件切块≥2；legacy 1 行；项目 1 行
+    assert len(rows) >= 5
+    tags_all = [t for r in rows for t in r["tags"]]
+    assert "claude-file:profile.md" in tags_all
+    assert "claude-file:jane.md" in tags_all
+    assert "claude:conversations-memory" in tags_all
+    assert "claude-project:My Project" in tags_all
+    # 长文件无损：拼接全部 [part] 块 ≈ 原文（去掉 part 头）
+    jane = [r for r in rows if "claude-file:jane.md" in r["tags"]]
+    assert len(jane) >= 2
+    joined = "\n\n".join(
+        r["content"].split("]\n", 1)[1] for r in jane)
+    assert "段落一" in joined and "段落末尾" in joined
+    # hash 口径 = sha256(content)
+    for r in rows:
+        assert r["content_hash"] == mp.hashlib.sha256(
+            r["content"].encode("utf-8")).hexdigest()
+    # 成包可往返
+    mp.write_pack(tmp_path / "pk", rows, [], "personal", "claude.ai-export")
+    manifest, back = mp.read_pack(tmp_path / "pk")
+    assert len(back) == len(rows)
+    assert manifest["namespace"] == "personal"
+
+
+def test_from_claude_nested_and_legacy_only(tmp_path):
+    # 嵌套目录 zip 同样能找到
+    rows, stats = mp.parse_claude_export(_claude_zip(tmp_path, nested=True))
+    assert stats["memory_files"] == 2
+    # 裸 json（最老一代：仅 project_memories）
+    bare = tmp_path / "memories.json"
+    bare.write_text(json.dumps(
+        [{"project_memories": {"x": "旧项目记忆"}, "account_uuid": "a"}]),
+        encoding="utf-8")
+    rows2, stats2 = mp.parse_claude_export(bare)
+    assert len(rows2) == 1 and stats2["memory_files"] == 0
+    assert rows2[0]["tags"] == ["claude", "claude-project:x"]
+
+
+def test_from_claude_empty(tmp_path):
+    bare = tmp_path / "memories.json"
+    bare.write_text(json.dumps([{"account_uuid": "a"}]), encoding="utf-8")
+    rows, _ = mp.parse_claude_export(bare)
+    assert rows == []
+
+
+def test_to_gemini(tmp_path):
+    rows = [
+        {"content": "偏好直接了当的回答", "content_hash": "h1",
+         "tags": ["test"], "memory_type": "preference",
+         "created_at_iso": None, "updated_at_iso": None},
+        {"content": "在忙 Mnevo 记忆系统", "content_hash": "h2",
+         "tags": ["test"], "memory_type": "goal",
+         "created_at_iso": None, "updated_at_iso": None},
+        {"content": "普通一条备注", "content_hash": "h3",
+         "tags": ["test"], "memory_type": None,
+         "created_at_iso": None, "updated_at_iso": None},
+    ]
+    mp.write_pack(tmp_path / "pk", rows, [], "personal", "t")
+    (tmp_path / "pk" / "identity").mkdir(exist_ok=True)
+    (tmp_path / "pk" / "identity" / "persona.md").write_text(
+        "工程师，实用主义", encoding="utf-8")
+    # 重写 manifest 计入 identity 文件
+    manifest, _ = mp.read_pack(tmp_path / "pk")
+    text = mp.build_gemini_text(
+        mp.read_pack(tmp_path / "pk")[1],
+        {"persona.md": "工程师，实用主义"})
+    assert "# About me" in text
+    assert "## Who I am" in text and "工程师，实用主义" in text
+    assert "## Preferences" in text and "偏好直接了当" in text
+    assert "## Current goals" in text and "Mnevo" in text
+    assert "## Notes" in text and "普通一条备注" in text
+    assert manifest["format"] == "mnevo.mempack"
