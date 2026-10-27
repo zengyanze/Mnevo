@@ -267,7 +267,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 ### v0.2（可携带性+代谢成型）
 1. ✅ **PAM v1.0 标准细读+映射器**（2026-10-27）：mempack v1 ↔ PAM v1.0 双向转换器；官方 schema 校验 0 违规+JCS 校验和与官方 rfc8785 库逐字节一致（tests 25/25）；
 2. ✅ **真实端点双适配器**（2026-10-27）：`from-claude`（实测三代格式：memory_files markdown 文件夹制 [path/content/updated_at]+conversations_memory 旧摘要+project_memories 经 projects.json 解名；zip 嵌套目录按后缀找；超长按引擎嵌入上限～500 字切块无损）+ `to-gemini`（官方 import-memory 路径=无 schema 粘贴文本，按 memory_type 分节+身份层附入）；格式依据=官方导出解析器逆向+memoryplugin 页面 JS 内嵌样本实证；
-3. **分型衰减上线**：pack schema v2 预留 valid_from/valid_to/supersedes 字段；butler 衰减提案路径真跑（仅 episode 遗忘曲线+访问强化；fact supersede 失效；skill 验证维护；身份层永不）；
+3. ✅ **分型衰减上线（2026-10-27）**：pack schema v2——行级谱系字段 valid_from/valid_to/supersedes（引擎 metadata.mnevo_* 投影，仅在有值时出现；读端兼容 v1 备份，坏类型入包即拒，import 经 POST metadata 还原）；butler `decay` 子命令——分型走 tags（`mnevo:type:skill｜fact`，缺省 episode，identity 不入引擎库），仅 episode 适用遗忘曲线（默认 60 天提案阈值）+访问强化豁免（引擎 metadata.last_accessed_at 近 14 天被检索过→豁免），超 180 天且访问≤1 升档归档提案；三档不混用：降权=引擎 PUT 打 `mnevo:downweighted` 标+`mnevo_decay` 元数据（不动内容/时间戳，出蒸馏管道）；归档=软删（出上下文留痕迹）；merge/distill 应用后自动回写 `mnevo_supersedes` 谱系（谱系优先于破坏性合并）。真跑（2026-10-27）：9 条全 episode、0 候选（库龄 1 天，首次真实候选预计 12 月下旬），代码路径真库验证+测试 34/34。已知边界：降权档召回侧无引擎钩子（§14-8）；
 4. **mem0 OSS 二号引擎接入**：同引擎接口约束（MCP/REST、绝不 import 内部）部署第二实例 → 同 pack 双引擎往返验证可插拔；
 5. **身份层精修+冷启动注入**：四件内容送代（用户主导+butler 提案流）；get_bootstrap_profile 面向 pi 会话注入；
 6. **运行期数据驱动项**：判重阈值 0.90 校准、遗忘提案真实触发、规模化（数百条）检索/蒸馏复测。
@@ -297,6 +297,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 5. 团队/家庭共享脑的 schema 口子（远期，不设计不承诺）。
 6. **WorkBuddy 接入路径（2026-10-23 降级为待验证的省事解）**：WorkBuddy 与 pi 同机，共用 SSH 隧道连 127.0.0.1:8000/mcp，服务器零暴露、OAuth 无限期延后。待验证三项见 adapters/workbuddy.md（Bearer header 支持/工具可见/agent 标识）。原“内网直连 or TLS 反代”仅在 WorkBuddy 不与 pi 同机时才需要；
 7. 离职/转岗时 work 区记忆在公司服务器上的归属与清理（用户侧知悉；记忆包导出能力即逃生舱）。
+8. **降权档的召回侧落地（2026-10-27 发现）**：引擎 v12 `/api/search` 无 tag 排除/权重参数，quality_boost 依赖 AI 质量分——§4.3 降权档当前仅实现蒸馏管道排除+包级标记，召回侧排除仍靠归档档（软删）引擎强制。去向：观察上游 search 是否加 metadata/tag 过滤；或 Mnevo 自封装 recall 层（v0.2+ 不急）。
 
 ---
 
@@ -328,6 +329,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 | Q26（管家形态） | 自己搓确定性流水线（非 agent 循环）+ pi 只当确认面；LLM 点状结构化提案；不上编排框架/不嵌 SDK | 2026-10-23 用户三选一裁决；理由=审计可复现、宿主无关、供应链最小、v0.1 无自主工具循环需求 |
 | Q27（spike 判读） | 引擎=惰性 ADD-only（零代谢），代谢链全部由管家接管；LLM 蒸馏插槽从 v0.2 提前到 v0.1；写入习惯需机制性触发（建议性文本不生效） | 2026-10-26 判读：8 次巩固 compressed/forgotten 恒 0；v12 遗忘门槛≈永不遗忘；与 mem0 OSS ADD-only 互证 |
 | Q28（v0.1 收官） | v0.1 六任务全部关闭；验收双测试以灾备演练（清空重导入）+spot 检索+全新会话三问形式通过（小库上）；work 区备份留公司内轮转，personal 区 age+GitHub 工具链就绪待引擎；WorkBuddy 拍板跳过 | 2026-10-26 用户"按序推进+记录问题不堵塞"总指令下的收官；遗留问题清单=observations/v0.1-issues.md（本地） |
+| Q29（分型衰减落地） | 分型走 tags（`mnevo:type:skill｜fact`，缺省 episode，identity 不入引擎库）；降权=引擎 PUT tags+metadata 打标（不动内容/时间戳）；谱系=merge/distill 应用后回写 `mnevo_supersedes`，pack v2 携带（读端兼容 v1）；召回侧降权无引擎钩子→先蒸馏管道排除+归档档兜底（§14-8） | 2026-10-27 v0.2-3；宿主无关原则不变（只依赖 REST 语义，不碰引擎内部）；三档不混用铁律（§4.3）保持 |
 
 ---
 

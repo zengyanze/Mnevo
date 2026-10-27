@@ -35,7 +35,7 @@
 
 ## 状态
 
-v0.1 spike 进行中：**[docs/spike-runbook.md](docs/spike-runbook.md)** — 对 mcp-memory-service 做一周 consolidation 成色观察（代谢 or 膨胀？），结果决定管家 v0.1 的接管范围。
+v0.1 已收官（2026-10-26，验收双测试通过）；v0.2 进行中：PAM v1.0 映射、Claude/Gemini 双适配器、分型衰减已上线，待做=mem0 二号引擎、身份层冷启动注入、数据驱动校准。spike 判读结论见 [docs/PLAN.md](docs/PLAN.md) §12/Q27。
 
 ### 记忆包 v0.1（首个可运行组件）
 
@@ -46,6 +46,7 @@ python scripts/mnevo_pack.py import --pack my.mempack --dry-run                 
 ```
 
 格式：`manifest.json`（版本+每文件 sha256）+ `memories.jsonl`（内容真源，向量不入包，导入端重算）+ `identity/`（仅已确认文件）。测试：`pytest tests/`（引擎不可达时真机用例自动 skip）。
+包格式现为 v2：行级谱系字段 `valid_from/valid_to/supersedes`（谱系优先于破坏性合并），读端兼容 v1 备份。
 
 **PAM v1.0 双向映射（v0.2）**：包可转换为社区标准 [Portable AI Memory](https://portable-ai-memory.org/spec/v1.0/)（schema 0 违规，JCS 校验和与官方 rfc8785 库逐字节一致）：
 
@@ -65,6 +66,7 @@ python scripts/mnevo_pack.py to-gemini --pack my.mempack --out gemini.md        
 
 ```bash
 python scripts/mnevo_butler.py scan                  # 全库扫描：memory-as-query 近重复对→提案
+python scripts/mnevo_butler.py decay                 # 分型衰减：episode 遗忘曲线+访问强化→降权/归档提案
 python scripts/mnevo_butler.py review --list          # 待审提案（pi 会话里直接跑）
 python scripts/mnevo_butler.py review --decide <id> accept|dismiss   # 确认=删重复/驳回
 python scripts/mnevo_butler.py audit --tail 20        # 追加式审计日志

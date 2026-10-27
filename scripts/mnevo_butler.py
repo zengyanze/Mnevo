@@ -15,6 +15,7 @@ LLM 蒸馏提案是 v0.2 插槽——scan 输出的提案文件即其输入格�
 
     mnevo_butler.py scan                                  # 全库扫描，写提案
     mnevo_butler.py distill [--all]                       # LLM 蒸馏提案（新增>=3条才跑）
+    mnevo_butler.py decay [--days N] [--archive-days N]   # 分型衰减提案（episode 曲线）
     mnevo_butler.py review --list                         # 待审提案
     mnevo_butler.py review --show <id前缀>                # 看全文
     mnevo_butler.py review --decide <id前缀> accept|dismiss
@@ -33,15 +34,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mnevo_pack import fetch_all_memories, http_json, post_memory  # noqa: E402
+from mnevo_pack import (fetch_all_memories, http_json,  # noqa: E402
+                        post_memory, post_memory_full)
 
 SIM_THRESHOLD = 0.90       # 近重复判定（保守，误报宁可少）
 SEARCH_LIMIT = 5
 PROPOSAL_KIND = "merge-candidate"
 DISTILL_KIND = "distill"
+DECAY_KIND = "decay"
 MIN_DISTILL_INPUT = 3      # 新增不足此数不吆喝 LLM
 DEFAULT_LLM_BASE = "https://open.bigmodel.cn/api/coding/paas/v4"
 DEFAULT_LLM_MODEL = "glm-5.3"
+
+# 分型衰减（PLAN §4.4）：仅 episode 适用遗忘曲线+访问强化；
+# fact 靠 supersede 失效（merge/distill 谱系回写）；skill 验证维护；identity 永不。
+DOWNWEIGHT_TAG = "mnevo:downweighted"   # 降权档：蒸馏管道排除（召回排序引擎无钩子，见 §14-8）
+TYPE_TAG = {"identity": "mnevo:type:identity", "skill": "mnevo:type:skill",
+            "fact": "mnevo:type:fact"}
+DEFAULT_DECAY_DAYS = 60       # episode 衰减曲线阈值（提案，非自动执行）
+DEFAULT_ARCHIVE_DAYS = 180    # 升档归档阈值（0=关闭）；归档=引擎软删，出上下文留痕迹
+DEFAULT_REINFORCE_DAYS = 14   # 访问强化窗口：近此天数被检索过 → 本轮豁免
 
 
 def llm_chat(base_url: str, api_key: str, model: str,
@@ -105,6 +117,26 @@ def _now_iso() -> str:
 
 def _short(hash_: str) -> str:
     return hash_[:12]
+
+
+def _parse_iso(ts: str) -> datetime:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def mnevo_type(memory: dict) -> str:
+    """Mnevo 分型（tags 携带，宿主无关）：identity/skill/fact 显式标注，缺省 episode。"""
+    tags = {str(t).lower() for t in (memory.get("tags") or [])}
+    if "identity" in tags or TYPE_TAG["identity"] in tags:
+        return "identity"
+    if "skill" in tags or TYPE_TAG["skill"] in tags:
+        return "skill"
+    if "fact" in tags or TYPE_TAG["fact"] in tags:
+        return "fact"
+    return "episode"
+
+
+def is_downweighted(memory: dict) -> bool:
+    return DOWNWEIGHT_TAG in {str(t).lower() for t in (memory.get("tags") or [])}
 
 
 class Butler:
@@ -328,7 +360,8 @@ class Butler:
         model = os.environ.get("MNEVO_LLM_MODEL", DEFAULT_LLM_MODEL)
         last = self._load_state().get("last_distill_iso", "")
         memories = [m for m in fetch_all_memories(self.url, self.token, self.store)
-                    if all_memories or (m.get("created_at_iso") or "") > last]
+                    if not is_downweighted(m)  # §4.3 降权=蒸馏管道排除
+                    and (all_memories or (m.get("created_at_iso") or "") > last)]
         if len(memories) < MIN_DISTILL_INPUT:
             self.audit("distill", skipped="too_few_new",
                        new=len(memories), since=last or "(first run)")
@@ -357,6 +390,127 @@ class Butler:
               f"archives={counts['archives']})")
         return 0
 
+    # ---------- decay（分型衰减，PLAN §4.4） ----------
+    def known_decay_subjects(self) -> set[str]:
+        """已提案过的衰减对象（含已决/dismiss）——dismiss 不复读，幂等。"""
+        subjects: set[str] = set()
+        for md in self.proposals.glob("*.md"):
+            text = md.read_text(encoding="utf-8").splitlines()
+            head = "\n".join(text[:15])
+            if "type: decay" not in head:
+                continue
+            for line in text[:15]:
+                m = re.match(r"^decay-of:\s*(\S+)$", line.strip())
+                if m:
+                    subjects.update(m.group(1).split(","))
+        return subjects
+
+    def decay(self, days: int | None = None, archive_days: int | None = None,
+              reinforce_days: int | None = None) -> int:
+        """episode 遗忘曲线 + 访问强化 → 降权/归档提案。机器只提案，人确认。"""
+        days = DEFAULT_DECAY_DAYS if days is None else days
+        archive_days = DEFAULT_ARCHIVE_DAYS if archive_days is None else archive_days
+        reinforce_days = (DEFAULT_REINFORCE_DAYS if reinforce_days is None
+                          else reinforce_days)
+        memories = fetch_all_memories(self.url, self.token, self.store)
+        known = self.known_decay_subjects()
+        now = datetime.now(timezone.utc)
+        stats = {"identity": 0, "skill": 0, "fact": 0, "episode": 0}
+        candidates: list[tuple[dict, str, str, dict]] = []  # (mem, tier, reason, detail)
+        for mem in memories:
+            mtype = mnevo_type(mem)
+            stats[mtype] += 1
+            if mtype != "episode":            # 仅 episode 适用遗忘曲线
+                continue
+            if mem["content_hash"] in known:
+                continue
+            if is_downweighted(mem):          # 已降权不重复提案
+                continue
+            created_iso = mem.get("created_at_iso") or ""
+            if not created_iso:
+                continue
+            try:
+                age_days = (now - _parse_iso(created_iso)).total_seconds() / 86400
+            except ValueError:
+                continue
+            meta = mem.get("metadata") or {}
+            access_count = meta.get("access_count") or 0
+            last_access = meta.get("last_accessed_at")
+            detail = {"age_days": round(age_days), "access_count": access_count}
+            if isinstance(last_access, (int, float)):
+                acc_age = ((now - datetime.fromtimestamp(last_access, tz=timezone.utc))
+                           .total_seconds() / 86400)
+                detail["days_since_access"] = round(acc_age)
+                if acc_age < reinforce_days:   # 访问强化：最近被检索过 → 豁免
+                    continue
+            if archive_days and age_days >= archive_days and access_count <= 1:
+                reason = (f"episode 已 {age_days:.0f} 天（≥归档阈值 {archive_days} 天）"
+                          f"且仅被访问 {access_count} 次")
+                candidates.append((mem, "archive", reason, detail))
+            elif age_days >= days:
+                reason = (f"episode 衰减曲线：{age_days:.0f} 天 ≥ {days} 天"
+                          f"（访问 {access_count} 次）")
+                candidates.append((mem, "downweight", reason, detail))
+        tiers = {t: sum(1 for _, tt, _, _ in candidates if tt == t)
+                 for t in ("downweight", "archive")}
+        self.audit("decay", **stats, candidates=len(candidates),
+                   downweight=tiers["downweight"], archive=tiers["archive"],
+                   days=days, archive_days=archive_days,
+                   reinforce_days=reinforce_days)
+        if not candidates:
+            print(f"decay: {len(memories)} memories typed {stats}, "
+                  f"no candidates (curve {days}d, archive {archive_days}d, "
+                  f"reinforce {reinforce_days}d)")
+            return 0
+        path = self.write_decay_proposal(candidates, days, archive_days,
+                                         reinforce_days, stats)
+        self.audit("decay-proposal", proposal=path.name,
+                   downweight=tiers["downweight"], archive=tiers["archive"])
+        print(f"decay: {len(candidates)} candidates -> {path.name} "
+              f"(downweight={tiers['downweight']} archive={tiers['archive']})")
+        return 0
+
+    def write_decay_proposal(self, candidates: list[tuple[dict, str, str, dict]],
+                             days: int, archive_days: int, reinforce_days: int,
+                             stats: dict) -> Path:
+        subjects = ",".join(m["content_hash"] for m, _, _, _ in candidates)
+        path = self.proposals / (
+            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{DECAY_KIND}.md")
+        lines = [
+            "---",
+            f"type: {DECAY_KIND}",
+            f"created: {_now_iso()}",
+            "status: open",
+            "action: apply-json",
+            "model: deterministic",
+            f"decay-of: {subjects}",
+            f"params: curve={days}d archive={archive_days}d reinforce={reinforce_days}d",
+            f"typed: episode={stats['episode']} fact={stats['fact']} "
+            f"skill={stats['skill']} identity={stats['identity']}",
+            "decided_by: ''",
+            "---",
+            "",
+            "# 分型衰减提案（确定性代码产出，人工确认后执行）",
+            "",
+            "三档不可混用（§4.3）：降权=打 `mnevo:downweighted` 标（出蒸馏管道）；"
+            "归档=引擎软删（出上下文留痕迹）；删除才是不留痕。",
+            "",
+        ]
+        actions: list[dict] = []
+        for i, (mem, tier, reason, detail) in enumerate(candidates, 1):
+            lines += [f"## {i}. [{tier}] `{_short(mem['content_hash'])}`", "",
+                      f"理由：{reason}（{json.dumps(detail, ensure_ascii=False)}）",
+                      "", "```text", mem["content"], "```", ""]
+            actions.append({"kind": tier, "hashes": [mem["content_hash"]],
+                            "reason": reason})
+        lines += ["确认：`review --decide <id> accept` 按下方 json 执行"
+                  "（downweight=PUT tags+metadata；archive=软删）。", "",
+                  "```json",
+                  json.dumps({"actions": actions}, ensure_ascii=False, indent=1),
+                  "```", ""]
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+
     # ---------- review ----------
     def find_proposal(self, prefix: str) -> Path:
         hits = [p for p in self.proposals.glob(f"*{prefix}*.md")]
@@ -383,6 +537,31 @@ class Butler:
     def review_show(self, prefix: str) -> int:
         print(self.find_proposal(prefix).read_text(encoding="utf-8"))
         return 0
+
+    def _put_memory_meta(self, hash_: str, body: dict, note: str = "") -> bool:
+        """PUT /api/memories/{hash}：只改 tags/type/metadata，不动内容与时间戳。"""
+        status, resp = http_json(
+            f"{self.url}/api/memories/{hash_}?store={self.store}", self.token,
+            method="PUT", body=body)
+        if status != 200:
+            self.audit("apply-error", hash=hash_, note=note,
+                       detail=f"HTTP {status}: {str(resp)[:120]}")
+            return False
+        return True
+
+    def _record_lineage(self, new_hash: str, supersedes: list[str],
+                        proposal_name: str) -> None:
+        """merge/distill 存入成功后给新条目回写 supersedes 谱系（§4.4）。
+
+        谱系优先于破坏性合并："他曾偏好X后改Y"本身是重要记忆——
+        旧条软删留痕 + 新条携带 supersedes，导出时进 pack v2。
+        """
+        ok = self._put_memory_meta(new_hash, {
+            "metadata": {"mnevo_supersedes": list(supersedes),
+                         "mnevo_valid_from": _now_iso()}},
+            note="lineage")
+        self.audit("lineage", proposal=proposal_name, hash=new_hash,
+                   supersedes=len(supersedes), ok=ok)
 
     def _apply_actions(self, text: str, proposal_name: str) -> tuple[int, int]:
         """执行 apply-json 蒸馏提案；返回 (applied, failed)。失败保留提案可重试。"""
@@ -413,7 +592,7 @@ class Butler:
                 ok = sum(1 for h in hashes if h in by_hash and _delete(h))
                 tags = sorted({t for s in sources
                                for t in (s.get("tags") or [])} | {"distilled"})
-                outcome, note = post_memory(
+                outcome, note, resp = post_memory_full(
                     self.url, self.token,
                     {"content": act["content"], "tags": tags})
                 self.audit("apply-store", proposal=proposal_name,
@@ -427,9 +606,30 @@ class Butler:
                                    hash=s["content_hash"], outcome=r_outcome)
                     continue
                 applied += ok + 1
+                new_hash = ""
+                if isinstance(resp, dict):
+                    new_hash = resp.get("content_hash") or ""
+                    if not new_hash:
+                        new_hash = (resp.get("memory") or {}).get("content_hash", "")
+                if new_hash:
+                    self._record_lineage(new_hash, hashes, proposal_name)
             elif kind == "archive":
                 applied += sum(1 for h in hashes
                                if h in by_hash and _delete(h))
+            elif kind == "downweight":
+                for h in hashes:
+                    if h not in by_hash:
+                        continue
+                    mem = by_hash[h]
+                    tags = sorted(set(mem.get("tags") or []) | {DOWNWEIGHT_TAG})
+                    meta = dict(mem.get("metadata") or {})
+                    meta["mnevo_decay"] = {"tier": "downweight", "at": _now_iso(),
+                                           "proposal": proposal_name}
+                    if self._put_memory_meta(h, {"tags": tags, "metadata": meta},
+                                             note="downweight"):
+                        applied += 1
+                    else:
+                        failed += 1
             else:
                 self.audit("apply-error", proposal=proposal_name,
                            kind=str(kind), note="unknown kind")
@@ -508,6 +708,14 @@ def main(argv: list[str] | None = None) -> int:
                                help="LLM 蒸馏提案（新记忆不足则跳过）")
     p_distill.add_argument("--all", action="store_true",
                            help="无视上次蒸馏时间，全库提案")
+    p_decay = sub.add_parser("decay", parents=[common],
+                             help="分型衰减提案（仅 episode 曲线；机器提案人工确认）")
+    p_decay.add_argument("--days", type=int, default=None,
+                         help="episode 衰减曲线阈值天数（默认 60）")
+    p_decay.add_argument("--archive-days", type=int, default=None,
+                         help="升档归档阈值天数（默认 180；0=关闭归档档）")
+    p_decay.add_argument("--reinforce-days", type=int, default=None,
+                         help="访问强化豁免窗口天数（默认 14）")
     p_audit = sub.add_parser("audit", parents=[common], help="审计日志")
     p_review = sub.add_parser("review", parents=[common], help="提案确认面")
 
@@ -533,6 +741,9 @@ def main(argv: list[str] | None = None) -> int:
         return butler.scan()
     if args.command == "distill":
         return butler.distill(all_memories=getattr(args, "all", False))
+    if args.command == "decay":
+        return butler.decay(days=args.days, archive_days=args.archive_days,
+                            reinforce_days=args.reinforce_days)
     if args.command == "audit":
         return butler.audit_tail(args.tail)
     if args.command == "review":

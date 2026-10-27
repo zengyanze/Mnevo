@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import threading
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -31,6 +32,7 @@ LIB = {m["content_hash"]: m for m in (A, B, C)}
 class _EngineStub(BaseHTTPRequestHandler):
     deleted: list[str] = []
     posted: list[dict] = []
+    puts: list[tuple[str, dict]] = []
     events: list[tuple] = []          # ("post", 内容前20) / ("delete", hash) 时序
     post_replies: list[dict] = []     # 队列；空则默认 {"success": True}
 
@@ -79,6 +81,13 @@ class _EngineStub(BaseHTTPRequestHandler):
         _EngineStub.events.append(("delete", h))
         self._send(200, {"success": True})
 
+    def do_PUT(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(length).decode("utf-8"))
+        h = self.path.split("?")[0].rsplit("/", 1)[-1]
+        _EngineStub.puts.append((h, body))
+        self._send(200, {"success": True, "message": "updated", "content_hash": h})
+
     def log_message(self, *args):
         return
 
@@ -89,6 +98,7 @@ def engine(tmp_path, monkeypatch):
     _EngineStub.posted = []
     _EngineStub.events = []
     _EngineStub.post_replies = []
+    _EngineStub.puts = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _EngineStub)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     monkeypatch.setenv(TOKEN_ENV, "stub-token")
@@ -96,6 +106,23 @@ def engine(tmp_path, monkeypatch):
                        "default", tmp_path / "home")
     yield butler
     server.shutdown()
+
+
+def _iso_days_ago(days: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days)
+            ).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def _epoch_days_ago(days: float) -> float:
+    return datetime.now(timezone.utc).timestamp() - days * 86400
+
+
+def _episode(hash_ch: str, days: float, tags=None, metadata=None) -> dict:
+    return {"content": f"经历 {hash_ch[0]}：{days:.0f} 天前的踩坑记录",
+            "content_hash": hash_ch * 64, "tags": tags or ["work"],
+            "memory_type": None, "created_at_iso": _iso_days_ago(days),
+            "updated_at_iso": _iso_days_ago(days),
+            "metadata": metadata or {}}
 
 
 def test_scan_writes_proposal_for_near_dup(engine):
@@ -252,3 +279,110 @@ def test_distill_review_dismiss_touches_nothing(engine, monkeypatch):
     engine.distill(all_memories=True)
     assert engine.review_decide("distill", "dismiss") == 0
     assert _EngineStub.deleted == [] and _EngineStub.posted == []
+
+
+# ---------------- decay（分型衰减，PLAN §4.4） ----------------
+
+def test_decay_typed_selection_and_tiers(engine):
+    """仅 episode 走曲线；访问强化豁免；skill/fact/已降权不参与；超龄升档归档。"""
+    extra = [
+        _episode("o", 70),                                        # 降权候选
+        None,                                                     # 占位：最近被检索 → 豁免
+        _episode("s", 70, tags=["work", "skill"]),                 # skill 永不自动衰减
+        _episode("d", 70, tags=["work", "mnevo:downweighted"]),    # 已降权跳过
+        _episode("z", 200, metadata={"access_count": 1}),          # 超龄+低访问 → 归档档
+        _episode("f", 1),                                         # 太新，不参与
+    ]
+    extra[1] = _episode("r", 70, metadata={"access_count": 3,
+                                           "last_accessed_at": _epoch_days_ago(2)})
+    for m in extra:
+        mb_lib_add(m)
+    try:
+        assert engine.decay(days=60, archive_days=180, reinforce_days=14) == 0
+        props = list((engine.home / "proposals").glob("*-decay.md"))
+        assert len(props) == 1, "一条批次提案"
+        text = props[0].read_text(encoding="utf-8")
+        assert f"decay-of: {'o'*64},{'z'*64}" in text
+        assert "[downweight]" in text and "[archive]" in text
+        assert "s" * 64 not in text and "r" * 64 not in text
+        audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
+        assert '"episode": 8' in audit          # 9 条中 8 条 episode，1 条 skill
+        assert '"skill": 1' in audit
+        assert '"candidates": 2' in audit
+    finally:
+        for m in extra:
+            mb_lib_remove(m["content_hash"])
+
+
+def mb_lib_add(m: dict) -> None:
+    LIB[m["content_hash"]] = m
+
+
+def mb_lib_remove(h: str) -> None:
+    LIB.pop(h, None)
+
+
+def test_decay_apply_downweight_and_archive(engine):
+    old = _episode("o", 70)
+    zombie = _episode("z", 200, metadata={"access_count": 1})
+    for m in (old, zombie):
+        mb_lib_add(m)
+    try:
+        engine.decay(days=60, archive_days=180, reinforce_days=14)
+        assert engine.review_decide("decay", "accept") == 0
+        assert zombie["content_hash"] in _EngineStub.deleted, "archive 档=软删"
+        puts = dict(_EngineStub.puts)
+        body = puts[old["content_hash"]]
+        assert "mnevo:downweighted" in body["tags"]
+        assert body["metadata"]["mnevo_decay"]["tier"] == "downweight"
+        audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
+        assert '"event": "apply-done"' in audit
+        assert '"event": "lineage"' not in audit, "无 merge 不应写谱系"
+    finally:
+        for m in (old, zombie):
+            mb_lib_remove(m["content_hash"])
+
+
+def test_decay_idempotent_and_dismiss_not_reproposed(engine):
+    old = _episode("o", 70)
+    mb_lib_add(old)
+    try:
+        engine.decay(days=60, archive_days=180, reinforce_days=14)
+        engine.decay(days=60, archive_days=180, reinforce_days=14)   # open 期间幂等
+        assert len(list((engine.home / "proposals").glob("*-decay.md"))) == 1
+        engine.review_decide("decay", "dismiss")
+        engine.decay(days=1, archive_days=0, reinforce_days=14)      # dismiss 不复读
+        assert len(list((engine.home / "proposals").glob("*-decay.md"))) == 1
+        assert _EngineStub.puts == [] and _EngineStub.deleted == []
+    finally:
+        mb_lib_remove(old["content_hash"])
+
+
+def test_distill_excludes_downweighted(engine, monkeypatch):
+    monkeypatch.setenv("MNEVO_LLM_API_KEY", "test-key")
+    A["tags"] = [*A["tags"], "mnevo:downweighted"]
+    try:
+        engine.distill(all_memories=True)   # A 被排除 → B/C 两条 < 3 → 跳过
+        audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
+        assert '"skipped": "too_few_new"' in audit
+        assert '"new": 2' in audit
+    finally:
+        A["tags"] = ["work"]
+
+
+def test_merge_apply_records_supersedes_lineage(engine, monkeypatch):
+    """merge 存入成功后，新条目 PUT 回写 mnevo_supersedes（§4.4 谱系）。"""
+    monkeypatch.setenv("MNEVO_LLM_API_KEY", "test-key")
+    fake = ('{"merges":[{"hashes":["' + "a" * 64 + '","' + "b" * 64 + '"],'
+            + '"content":"合并稿"}],"distills":[],"archives":[]}')
+    monkeypatch.setattr(mb, "llm_chat", lambda *a, **k: fake)
+    _EngineStub.post_replies = [{"success": True, "content_hash": "e" * 64}]
+    engine.distill(all_memories=True)
+    assert engine.review_decide("distill", "accept") == 0
+    puts = dict(_EngineStub.puts)
+    assert "e" * 64 in puts
+    meta = puts["e" * 64]["metadata"]
+    assert meta["mnevo_supersedes"] == ["a" * 64, "b" * 64]
+    assert meta["mnevo_valid_from"]
+    audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
+    assert '"event": "lineage"' in audit

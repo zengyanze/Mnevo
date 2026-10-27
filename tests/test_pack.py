@@ -354,3 +354,75 @@ def test_to_gemini(tmp_path):
     assert "## Current goals" in text and "Mnevo" in text
     assert "## Notes" in text and "普通一条备注" in text
     assert manifest["format"] == "mnevo.mempack"
+
+
+# ---------------- v2 谱系字段（PLAN §4.4：谱系优先于破坏性合并） ----------------
+
+def test_pack_row_lineage_projection():
+    engine_mem = {
+        "content": "偏好 X 后改 Y（合并稿）",
+        "content_hash": "h2",
+        "tags": ["work", "distilled"],
+        "memory_type": None,
+        "metadata": {"mnevo_valid_from": "2026-10-01T00:00:00Z",
+                     "mnevo_supersedes": ["a" * 64, "b" * 64],
+                     "access_count": 9},          # 遥测仍不入包
+        "created_at_iso": "2026-10-01T00:00:00Z",
+        "updated_at_iso": "2026-10-01T00:00:00Z",
+    }
+    row = mp.pack_row(engine_mem)
+    assert row["valid_from"] == "2026-10-01T00:00:00Z"
+    assert row["supersedes"] == ["a" * 64, "b" * 64]
+    assert "valid_to" not in row and "metadata" not in row
+    plain = mp.pack_row({**engine_mem, "metadata": {}})
+    assert "valid_from" not in plain and "supersedes" not in plain
+
+
+def test_pack_v2_roundtrip_and_v1_backcompat(tmp_path):
+    rows = _rows(1)
+    rows[0]["valid_from"] = "2026-10-01T00:00:00Z"
+    rows[0]["supersedes"] = ["a" * 64]
+    pack = mp.write_pack(tmp_path / "v2.mempack", rows, [], "work", "t")
+    manifest, back = mp.read_pack(pack)
+    assert manifest["format_version"] == 2
+    assert back[0]["supersedes"] == ["a" * 64]
+
+    mpath = pack / "manifest.json"                     # v1 备份仍可读（升级路径）
+    m = json.loads(mpath.read_text(encoding="utf-8"))
+    m["format_version"] = 1
+    mpath.write_text(json.dumps(m, ensure_ascii=False, indent=2) + "\n",
+                     encoding="utf-8")
+    manifest1, rows1 = mp.read_pack(pack)
+    assert manifest1["format_version"] == 1 and rows1 == back
+
+    m["format_version"] = 99                           # 未知版本拒读
+    mpath.write_text(json.dumps(m, ensure_ascii=False, indent=2) + "\n",
+                     encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported pack version"):
+        mp.read_pack(pack)
+
+
+def test_read_pack_rejects_bad_lineage_types(tmp_path):
+    d = tmp_path / "bad.mempack"
+    d.mkdir()
+    bad = {"content": "x", "content_hash": "h" * 64, "tags": [],
+           "memory_type": None, "created_at_iso": None,
+           "updated_at_iso": None, "supersedes": "notaList"}
+    (d / "memories.jsonl").write_text(
+        json.dumps(bad, ensure_ascii=False) + "\n", encoding="utf-8")
+    manifest = {"format": "mnevo.mempack", "format_version": 2,
+                "files": {"memories.jsonl":
+                          mp._sha256_bytes((d / "memories.jsonl").read_bytes())}}
+    (d / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="supersedes"):
+        mp.read_pack(d)
+
+
+def test_post_memory_restores_lineage_metadata(stub_server):
+    row = {"content": "谱系记忆", "content_hash": "l" * 64, "tags": [],
+           "valid_from": "2026-10-01T00:00:00Z", "supersedes": ["a" * 64]}
+    outcome, _, resp = mp.post_memory_full(stub_server, "t", row)
+    assert outcome == "created" and resp.get("content_hash")
+    body = _StubHandler.posts[-1]["body"]
+    assert body["metadata"] == {"mnevo_valid_from": "2026-10-01T00:00:00Z",
+                                "mnevo_supersedes": ["a" * 64]}

@@ -38,7 +38,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+SUPPORTED_FORMAT_VERSIONS = (1, 2)  # 读端兼容 v1 备份；写端总是 v2
 IDENTITY_NAMES = ("persona.md", "values.md", "goals.md", "threads.md")
 PAGE_SIZE = 100
 USER_AGENT = "mnevo-pack/0.1"
@@ -124,8 +125,12 @@ def fetch_engine_hashes(base_url: str, token: str, store: str = "default",
 
 
 def pack_row(memory: dict) -> dict:
-    """引擎记忆 → 可携带行：保内容与谱系时间，弃访问遥测与派生元数据。"""
-    return {
+    """引擎记忆 → 可携带行：保内容与谱系时间，弃访问遥测与派生元数据。
+
+    v2 谱系字段（PLAN §4.4）：valid_from/valid_to/supersedes 从引擎
+    metadata.mnevo_* 命名空间投影，只在有值时出现——谱系优先于破坏性合并。
+    """
+    row = {
         "content": memory.get("content", ""),
         "content_hash": memory.get("content_hash", ""),
         "tags": memory.get("tags") or [],
@@ -133,6 +138,38 @@ def pack_row(memory: dict) -> dict:
         "created_at_iso": memory.get("created_at_iso"),
         "updated_at_iso": memory.get("updated_at_iso"),
     }
+    row.update({k: v for k, v in row_lineage(memory.get("metadata") or {}).items()})
+    return row
+
+
+def row_lineage(metadata: dict) -> dict:
+    """引擎 metadata.mnevo_* → 包级谱系字段（缺省不出现，保持 v1 行形状）。"""
+    out: dict = {}
+    valid_from = metadata.get("mnevo_valid_from")
+    valid_to = metadata.get("mnevo_valid_to")
+    supersedes = metadata.get("mnevo_supersedes")
+    if isinstance(valid_from, str) and valid_from:
+        out["valid_from"] = valid_from
+    if isinstance(valid_to, str) and valid_to:
+        out["valid_to"] = valid_to
+    if (isinstance(supersedes, list) and supersedes
+            and all(isinstance(h, str) and h for h in supersedes)):
+        out["supersedes"] = supersedes
+    return out
+
+
+def _validate_rows(rows: list[dict]) -> None:
+    """v2 谱系字段类型校验：坏类型在入包/出包时即拒，不留到导入端。"""
+    for r in rows:
+        hid = str(r.get("content_hash", "?"))[:12]
+        for key in ("valid_from", "valid_to"):
+            v = r.get(key)
+            if v is not None and not (isinstance(v, str) and v):
+                raise ValueError(f"pack row {hid}…: {key} must be a non-empty ISO string")
+        sup = r.get("supersedes")
+        if sup is not None and (not isinstance(sup, list)
+                                or not all(isinstance(h, str) and h for h in sup)):
+            raise ValueError(f"pack row {hid}…: supersedes must be a list of hash strings")
 
 
 def write_pack(out_dir: Path, rows: list[dict], identity_files: list[Path],
@@ -183,8 +220,10 @@ def read_pack(pack_dir: Path) -> tuple[dict, list[dict]]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("format") != "mnevo.mempack":
         raise ValueError(f"unknown pack format: {manifest.get('format')!r}")
-    if manifest.get("format_version") != FORMAT_VERSION:
-        raise ValueError(f"unsupported pack version: {manifest.get('format_version')!r}")
+    version = manifest.get("format_version")
+    if version not in SUPPORTED_FORMAT_VERSIONS:
+        raise ValueError(f"unsupported pack version: {version!r} "
+                         f"(supported: {', '.join(map(str, SUPPORTED_FORMAT_VERSIONS))})")
 
     for rel, expected in manifest.get("files", {}).items():
         path = pack_dir / rel
@@ -202,36 +241,58 @@ def read_pack(pack_dir: Path) -> tuple[dict, list[dict]]:
             line = line.strip()
             if line:
                 rows.append(json.loads(line))
+    _validate_rows(rows)
     return manifest, rows
 
 
-def post_memory(base_url: str, token: str, row: dict,
-                timeout: int = 60, store: str | None = None) -> tuple[str, str]:
-    """重存一条记忆；返回 (结果分类, 说明)。分类 ∈ created/duplicate/rejected。"""
+def _row_metadata(row: dict) -> dict:
+    """包行谱系字段 → 引擎 metadata（mnevo_* 命名空间，导入时还原谱系）。"""
+    meta: dict = {}
+    if row.get("valid_from"):
+        meta["mnevo_valid_from"] = row["valid_from"]
+    if row.get("valid_to"):
+        meta["mnevo_valid_to"] = row["valid_to"]
+    if row.get("supersedes"):
+        meta["mnevo_supersedes"] = row["supersedes"]
+    return meta
+
+
+def post_memory_full(base_url: str, token: str, row: dict,
+                     timeout: int = 60,
+                     store: str | None = None) -> tuple[str, str, object]:
+    """重存一条记忆；返回 (结果分类, 说明, 响应体)。分类 ∈ created/duplicate/rejected。"""
     url = f"{base_url.rstrip('/')}/api/memories"
     body = {"content": row["content"], "tags": row.get("tags") or []}
+    metadata = _row_metadata(row)
+    if metadata:
+        body["metadata"] = metadata
     if store:
         body["store"] = store
     status, resp = http_json(
         url, token, method="POST", body=body, timeout=timeout,
     )
-    body = resp
-    text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
+    text = resp if isinstance(resp, str) else json.dumps(resp, ensure_ascii=False)
     if status in (200, 201):
         # v12 语义查重：拒存时包成 HTTP 200 + success:false + "Duplicate…"
         # 但"相似已存仍写入"时是 success:true + duplicate 字样 → 应算 created
-        if isinstance(body, dict) and body.get("success") is False:
+        if isinstance(resp, dict) and resp.get("success") is False:
             if "duplicate" in text.lower() or "exist" in text.lower():
-                return "duplicate", text[:200]
-            return "rejected", text[:200]
-        if isinstance(body, dict) and body.get("success") is True:
-            return "created", text[:200]
+                return "duplicate", text[:200], resp
+            return "rejected", text[:200], resp
+        if isinstance(resp, dict) and resp.get("success") is True:
+            return "created", text[:200], resp
         if "duplicate" in text.lower() or "exist" in text.lower():
-            return "duplicate", text[:200]
-        return "created", text[:200]
+            return "duplicate", text[:200], resp
+        return "created", text[:200], resp
     if status in (409, 422) or "exist" in text.lower() or "duplicate" in text.lower():
-        return "duplicate", text[:200]
-    return "rejected", f"HTTP {status}: {text[:200]}"
+        return "duplicate", text[:200], resp
+    return "rejected", f"HTTP {status}: {text[:200]}", resp
+
+
+def post_memory(base_url: str, token: str, row: dict,
+                timeout: int = 60, store: str | None = None) -> tuple[str, str]:
+    outcome, note, _ = post_memory_full(base_url, token, row, timeout, store)
+    return outcome, note
 
 
 # ---------- PAM v1.0（Portable AI Memory）映射 ----------
