@@ -35,7 +35,7 @@
 
 ## 状态
 
-v0.1 已收官（2026-10-26，验收双测试通过）；v0.2 进行中：PAM v1.0 映射、Claude/Gemini 双适配器、分型衰减已上线，待做=mem0 二号引擎、身份层冷启动注入、数据驱动校准。spike 判读结论见 [docs/PLAN.md](docs/PLAN.md) §12/Q27。
+v0.1 已收官（2026-10-26，验收双测试通过）；v0.2 进行中：PAM v1.0 映射、Claude/Gemini 双适配器、分型衰减、**mem0 OSS 二号引擎**（[engines/mem0-oss](engines/mem0-oss/README.md)——同 pack 双引擎往返已验证，换引擎=换 URL）已上线；待做=身份层冷启动注入、数据驱动校准。spike 判读结论见 [docs/PLAN.md](docs/PLAN.md) §12/Q27。
 
 ### 记忆包 v0.1（首个可运行组件）
 
