@@ -7,7 +7,9 @@
 #   --base      仓库内目录前缀，默认 packs（最终路径 packs/<文件名>.age）
 #
 # 环境: 需要 age、gh（已登录）。恢复: gh api 下载 blob → base64 -d | age -d -i <私钥>
-# 红线: 只用于 personal 区记忆包；work 区包不出公司基础设施（PLAN §9.2）。
+# 红线: 日常只用于 personal 区记忆包；work 区包不出公司基础设施（PLAN §9.2）。
+#   例外=离职逃生舱（PLAN §8/§14-7/Q30）：work 包经敏感扫描+用户明示授权，
+#   一次性入个人备份仓（age 加密，密钥永不入库）。
 set -euo pipefail
 
 PACK="${1:?usage: mempack_remote_backup.sh <pack.tar.gz> [options]}"
