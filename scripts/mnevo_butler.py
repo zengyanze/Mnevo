@@ -16,6 +16,7 @@ LLM 蒸馏提案是 v0.2 插槽——scan 输出的提案文件即其输入格�
     mnevo_butler.py scan                                  # 全库扫描，写提案
     mnevo_butler.py distill [--all]                       # LLM 蒸馏提案（新增>=3条才跑）
     mnevo_butler.py decay [--days N] [--archive-days N]   # 分型衰减提案（episode 曲线）
+    mnevo_butler.py identity [--dir identity/live]        # 身份层三件刷新提案（人工确认）
     mnevo_butler.py review --list                         # 待审提案
     mnevo_butler.py review --show <id前缀>                # 看全文
     mnevo_butler.py review --decide <id前缀> accept|dismiss
@@ -30,7 +31,7 @@ import os
 import re
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -42,6 +43,12 @@ SEARCH_LIMIT = 5
 PROPOSAL_KIND = "merge-candidate"
 DISTILL_KIND = "distill"
 DECAY_KIND = "decay"
+IDENTITY_KIND = "identity"
+IDENTITY_FILES = ("persona.md", "values.md", "goals.md", "threads.md")
+# §4.1 铁律：Persona 由用户显式维护，不从经历流自动生成——机器可提案的只有这三件
+IDENTITY_EDITABLE = ("values.md", "goals.md", "threads.md")
+IDENTITY_CONTENT_LIMIT = 900  # 身份层是文件非记忆条目（不进嵌入）；
+#                              # 注入侧另有 bootstrap 总预算（默认 2400 字）管着
 MIN_DISTILL_INPUT = 3      # 新增不足此数不吆喝 LLM
 DEFAULT_LLM_BASE = "https://open.bigmodel.cn/api/coding/paas/v4"
 DEFAULT_LLM_MODEL = "glm-5.3"
@@ -111,6 +118,36 @@ def _parse_llm_json(text: str) -> dict:
     return out
 
 
+def _parse_identity_json(text: str) -> list[dict]:
+    """身份层提案 JSON 校验；persona.md 提案在解析层即拒（§4.1 铁律）。"""
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+    raw = fence.group(1) if fence else text
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError(f"no json object in llm output: {text[:120]}")
+    data = json.loads(raw[start:end + 1])
+    items = data.get("files", [])
+    if not isinstance(items, list):
+        raise ValueError("llm json 'files' not a list")
+    out = []
+    for it in items:
+        if not isinstance(it, dict):
+            raise ValueError("identity files item not object")
+        name = it.get("name")
+        if name not in IDENTITY_EDITABLE:
+            raise ValueError(f"identity file not machine-editable: {name!r}"
+                             "（persona.md 由用户显式维护）")
+        content = it.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"{name} needs non-empty content")
+        if len(content) > IDENTITY_CONTENT_LIMIT:
+            raise ValueError(f"{name} content {len(content)} chars exceeds "
+                             f"{IDENTITY_CONTENT_LIMIT}")
+        out.append({"name": name, "content": content,
+                    "reason": str(it.get("reason", ""))})
+    return out
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -140,11 +177,15 @@ def is_downweighted(memory: dict) -> bool:
 
 
 class Butler:
-    def __init__(self, url: str, token: str, store: str, home: Path):
+    def __init__(self, url: str, token: str, store: str, home: Path,
+                 identity_dir: Path | None = None):
         self.url = url.rstrip("/")
         self.token = token
         self.store = store
         self.home = home
+        self.identity_dir = (Path(identity_dir) if identity_dir else
+                             Path(__file__).resolve().parent.parent
+                             / "identity" / "live")
         self.proposals = home / "proposals"
         self.audit_path = home / "audit" / "butler.jsonl"
         self.proposals.mkdir(parents=True, exist_ok=True)
@@ -511,6 +552,116 @@ class Butler:
         path.write_text("\n".join(lines), encoding="utf-8")
         return path
 
+    # ---------- identity（身份层提案流，PLAN §4.1/§12 v0.2-5） ----------
+    def _identity_prompt(self, current: dict[str, str],
+                         memories: list[dict]) -> tuple[str, str]:
+        items = [{"hash": m["content_hash"], "content": m["content"],
+                  "tags": m.get("tags") or [],
+                  "created": m.get("created_at_iso")} for m in memories]
+        system = ("你是 Mnevo 身份层提案器。铁律：persona.md 由用户显式维护，"
+                  "绝不提案；只许对 values.md/goals.md/threads.md 三件给出"
+                  "整文件新稿；机器只提案不执行，用户确认前身份层一字不变。"
+                  "输出必须是纯 JSON，不要输出 JSON 以外的任何文字。")
+        user = (
+            "当前身份层四件（真源，提案以它为底稿）：\n"
+            + json.dumps(current, ensure_ascii=False, indent=1)
+            + "\n\n近期记忆（经历快照，按历史经验消费，可能过时）：\n"
+            + json.dumps(items, ensure_ascii=False, indent=1)
+            + "\n\n请提案需要刷新的文件（拿不准就不提，宁缺毋滥；无提案则空数组）：\n"
+            "- 以当前文件为底稿：保留仍成立的条目、更新已过时条目、关闭已闭环条目；\n"
+            "- 每份新稿 ≤600 字，markdown，保留原有标题结构；\n"
+            "- 工作细节留在 work 区记忆，身份层只留中性表述与主线；\n"
+            '\n输出 schema：{"files":[{"name":"values.md|goals.md|threads.md",'
+            '"content":"整文件新稿","reason":"一句话依据"}]}')
+        return system, user
+
+    def write_identity_proposal(self, proposals: list[dict],
+                                current: dict[str, str],
+                                identity_dir: Path) -> Path:
+        path = self.proposals / (
+            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+            f"-{IDENTITY_KIND}.md")
+        names = ",".join(p["name"] for p in proposals)
+        lines = [
+            "---",
+            f"type: {IDENTITY_KIND}",
+            f"created: {_now_iso()}",
+            "status: open",
+            "action: apply-identity",
+            f"identity-of: {names}",
+            f"identity-dir: {identity_dir.resolve()}",
+            "decided_by: ''",
+            "---",
+            "",
+            "# 身份层提案（LLM 起草，人工确认后整文件生效）",
+            "",
+            "> §4.1 铁律：机器只提案。accept=按下方 json **整文件覆盖**；"
+            "dismiss=一个字不动。现稿全文已留在本文件，可随时找回。",
+            "",
+        ]
+        actions = []
+        for p in proposals:
+            lines += [f"## {p['name']}", f"依据：{p['reason']}", "",
+                      "### 现稿", "", "```markdown",
+                      current.get(p["name"], ""), "```", "",
+                      "### 新稿", "", "```markdown", p["content"], "```", ""]
+            actions.append({"kind": "identity-write", "file": p["name"],
+                            "content": p["content"]})
+        lines += ["```json",
+                  json.dumps({"actions": actions}, ensure_ascii=False, indent=1),
+                  "```", ""]
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+
+    def identity(self, identity_dir: Path | None = None,
+                 since_days: int = 30) -> int:
+        """近期记忆 → 身份层三件（values/goals/threads）刷新提案。"""
+        identity_dir = Path(identity_dir) if identity_dir else self.identity_dir
+        if not identity_dir.is_dir():
+            print(f"error: identity dir not found: {identity_dir}",
+                  file=sys.stderr)
+            return 2
+        api_key = os.environ.get("MNEVO_LLM_API_KEY", "")
+        if not api_key:
+            self.audit("identity", skipped="no_llm_key")
+            print("identity: skipped (MNEVO_LLM_API_KEY not set)")
+            return 0
+        base = os.environ.get("MNEVO_LLM_BASE_URL", DEFAULT_LLM_BASE)
+        model = os.environ.get("MNEVO_LLM_MODEL", DEFAULT_LLM_MODEL)
+        current: dict[str, str] = {}
+        for name in IDENTITY_FILES:
+            p = identity_dir / name
+            current[name] = (p.read_text(encoding="utf-8").strip()
+                             if p.is_file() else "")
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(days=since_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        memories = [m for m in fetch_all_memories(self.url, self.token, self.store)
+                    if (m.get("created_at_iso") or "") >= cutoff]
+        if not memories:
+            self.audit("identity", skipped="no_recent_memories",
+                       since_days=since_days)
+            print(f"identity: skipped (no memories since {cutoff})")
+            return 0
+        system, user = self._identity_prompt(current, memories)
+        try:
+            raw = llm_chat(base, api_key, model, system, user)
+            proposals = _parse_identity_json(raw)
+        except (RuntimeError, ValueError) as exc:
+            self.audit("identity", error=str(exc)[:300])
+            print(f"identity: error: {exc}", file=sys.stderr)
+            return 1
+        if not proposals:
+            self.audit("identity", proposals=0, input=len(memories),
+                       result="none")
+            print(f"identity: {len(memories)} memories reviewed, "
+                  "nothing proposed")
+            return 0
+        path = self.write_identity_proposal(proposals, current, identity_dir)
+        self.audit("identity", proposals=len(proposals), input=len(memories),
+                   proposal=path.name)
+        print(f"identity: {len(proposals)} file proposal(s) -> {path.name}")
+        return 0
+
     # ---------- review ----------
     def find_proposal(self, prefix: str) -> Path:
         hits = [p for p in self.proposals.glob(f"*{prefix}*.md")]
@@ -562,6 +713,46 @@ class Butler:
             note="lineage")
         self.audit("lineage", proposal=proposal_name, hash=new_hash,
                    supersedes=len(supersedes), ok=ok)
+
+    def _apply_identity(self, text: str, proposal_name: str) -> tuple[int, int]:
+        """执行 apply-identity 提案：整文件覆盖 IDENTITY_EDITABLE 三件。"""
+        m = re.search(r"```json\s*(\{.*?\})\s*```", text, re.S)
+        if not m:
+            print("apply-identity proposal has no json block", file=sys.stderr)
+            return 0, 1
+        actions = json.loads(m.group(1))["actions"]
+        dm = re.search(r"^identity-dir:\s*(.+)$", text, re.M)
+        if not dm:
+            # 2026-10-28 事故加固：无目标目录的提案一律拒执——
+            # 首版曾回落到真实 identity/live，测试假稿污染过真身（已从逃生舱恢复）
+            print("apply-identity: proposal lacks identity-dir — refusing",
+                  file=sys.stderr)
+            self.audit("apply-error", proposal=proposal_name,
+                       note="identity proposal lacks identity-dir")
+            return 0, 1
+        target_dir = Path(dm.group(1).strip())
+        if not target_dir.is_dir():
+            target_dir.mkdir(parents=True, exist_ok=True)
+        applied = failed = 0
+        for act in actions:
+            if (act.get("kind") != "identity-write"
+                    or act.get("file") not in IDENTITY_EDITABLE):
+                self.audit("apply-error", proposal=proposal_name,
+                           note=f"bad identity action: {act.get('file')!r}")
+                failed += 1
+                continue
+            target = target_dir / act["file"]
+            try:
+                target.write_text(act["content"].rstrip() + "\n",
+                                  encoding="utf-8")
+                self.audit("apply-identity", proposal=proposal_name,
+                           file=act["file"])
+                applied += 1
+            except OSError as exc:
+                self.audit("apply-error", proposal=proposal_name,
+                           file=act["file"], note=str(exc)[:120])
+                failed += 1
+        return applied, failed
 
     def _apply_actions(self, text: str, proposal_name: str) -> tuple[int, int]:
         """执行 apply-json 蒸馏提案；返回 (applied, failed)。失败保留提案可重试。"""
@@ -644,7 +835,14 @@ class Butler:
             return 1
 
         if decision == "accept":
-            if "action: apply-json" in text[:400]:
+            if "action: apply-identity" in text[:400]:
+                applied, failed = self._apply_identity(text, path.name)
+                if failed:
+                    print(f"{path.name}: {failed} action(s) FAILED — "
+                          "proposal left open for retry", file=sys.stderr)
+                    return 2
+                self.audit("apply-done", proposal=path.name, applied=applied)
+            elif "action: apply-json" in text[:400]:
                 applied, failed = self._apply_actions(text, path.name)
                 if failed:
                     print(f"{path.name}: {failed} action(s) FAILED — "
@@ -716,6 +914,12 @@ def main(argv: list[str] | None = None) -> int:
                          help="升档归档阈值天数（默认 180；0=关闭归档档）")
     p_decay.add_argument("--reinforce-days", type=int, default=None,
                          help="访问强化豁免窗口天数（默认 14）")
+    p_identity = sub.add_parser("identity", parents=[common],
+                                help="身份层提案（LLM 起草三件，人工确认）")
+    p_identity.add_argument("--dir", default=None,
+                            help="身份层目录（默认 <repo>/identity/live）")
+    p_identity.add_argument("--since-days", type=int, default=30,
+                            help="喂给提案器的记忆回看天数（默认 30）")
     p_audit = sub.add_parser("audit", parents=[common], help="审计日志")
     p_review = sub.add_parser("review", parents=[common], help="提案确认面")
 
@@ -744,6 +948,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "decay":
         return butler.decay(days=args.days, archive_days=args.archive_days,
                             reinforce_days=args.reinforce_days)
+    if args.command == "identity":
+        return butler.identity(identity_dir=getattr(args, "dir", None),
+                               since_days=args.since_days)
     if args.command == "audit":
         return butler.audit_tail(args.tail)
     if args.command == "review":

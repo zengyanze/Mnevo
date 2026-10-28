@@ -67,12 +67,20 @@ python scripts/mnevo_pack.py to-gemini --pack my.mempack --out gemini.md        
 ```bash
 python scripts/mnevo_butler.py scan                  # 全库扫描：memory-as-query 近重复对→提案
 python scripts/mnevo_butler.py decay                 # 分型衰减：episode 遗忘曲线+访问强化→降权/归档提案
+python scripts/mnevo_butler.py identity              # 身份层三件刷新提案（persona 永不机器改写）
 python scripts/mnevo_butler.py review --list          # 待审提案（pi 会话里直接跑）
 python scripts/mnevo_butler.py review --decide <id> accept|dismiss   # 确认=删重复/驳回
 python scripts/mnevo_butler.py audit --tail 20        # 追加式审计日志
 ```
 
 不是常驻 agent：候选发现=确定性代码（引擎检索作相似度 oracle，阈值 0.90），提案/审计落盘 markdown+jsonl（天然可审计），LLM 蒸馏提案是 v0.2 插槽（scan 的提案文件即其输入格式）。
+
+### 冷启动注入（v0.2-5）
+
+```bash
+python scripts/mnevo_bootstrap.py build --identity identity/live   # 身份层→确定性常驻注入块
+python scripts/mnevo_bootstrap.py check --identity identity/live   # 体检：缺件/threads 过时
+```
 
 命名：Mnevo（希腊语 μνήμη 词根自造词，2026-10-14 定名；查证记录见 PLAN §14-3）。设计哲学：记忆 → 叙事自我 → 延展心智（PLAN §0.4）。
 

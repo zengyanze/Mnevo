@@ -268,7 +268,7 @@ def test_post_memory_classifies_embed_failure(engine):
 def test_parse_llm_json_rejects_long_content():
     with pytest.raises(ValueError):
         mb._parse_llm_json('{"merges":[{"hashes":["a"],"content":"'
-                           + "长" * 601 + '"}],"distills":[],"archives":[]}')
+                           + "长" * 901 + '"}],"distills":[],"archives":[]}')
 
 
 def test_distill_review_dismiss_touches_nothing(engine, monkeypatch):
@@ -386,3 +386,74 @@ def test_merge_apply_records_supersedes_lineage(engine, monkeypatch):
     assert meta["mnevo_valid_from"]
     audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
     assert '"event": "lineage"' in audit
+
+
+# ---------------- identity（身份层提案流，§4.1/v0.2-5） ----------------
+
+def _identity_dir(tmp_path):
+    d = tmp_path / "live"
+    d.mkdir()
+    for name in ("persona.md", "values.md", "goals.md", "threads.md"):
+        (d / name).write_text(f"# {name} 现稿\n\n旧内容。", encoding="utf-8")
+    return d
+
+
+def test_parse_identity_json_rejects_persona():
+    good = ('```json\n{"files":[{"name":"goals.md","content":"# Goals 新稿",'
+            '"reason":"刷新"}]}\n```')
+    out = mb._parse_identity_json(good)
+    assert out[0]["name"] == "goals.md"
+    with pytest.raises(ValueError, match="persona"):
+        mb._parse_identity_json(
+            '{"files":[{"name":"persona.md","content":"x","reason":"y"}]}')
+    with pytest.raises(ValueError, match="exceeds"):
+        mb._parse_identity_json(
+            '{"files":[{"name":"values.md","content":"' + "长" * 901 + '"}]}')
+
+
+def test_identity_proposal_accept_applies_only_editable(engine, tmp_path,
+                                                        monkeypatch):
+    identity_dir = _identity_dir(tmp_path)
+    monkeypatch.setenv("MNEVO_LLM_API_KEY", "test-key")
+    fake = ('```json\n{"files":['
+            + '{"name":"goals.md","content":"# Goals\\n\\n新稿：v0.2 主线。",'
+            + '"reason":"目标已过时"},'
+            + '{"name":"threads.md","content":"# Active Threads\\n\\n新稿线程。",'
+            + '"reason":"spike 已闭环"}]}\n```')
+    monkeypatch.setattr(mb, "llm_chat", lambda *a, **k: fake)
+
+    assert engine.identity(identity_dir=identity_dir, since_days=30) == 0
+    props = list((engine.home / "proposals").glob("*-identity.md"))
+    assert len(props) == 1
+    text = props[0].read_text(encoding="utf-8")
+    assert "action: apply-identity" in text
+    assert "identity-of: goals.md,threads.md" in text
+    assert "现稿" in text and "新稿" in text, "新旧全文都留在提案里可找回"
+
+    assert engine.review_decide("identity", "accept") == 0
+    new_goals = (identity_dir / "goals.md").read_text(encoding="utf-8")
+    assert "新稿：v0.2 主线" in new_goals
+    assert "# persona.md 现稿" in (identity_dir / "persona.md").read_text(
+        encoding="utf-8"), "persona 一字未动"
+    audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
+    assert '"event": "apply-identity"' in audit
+    assert '"event": "apply-done"' in audit
+
+
+def test_identity_dismiss_touches_nothing(engine, tmp_path, monkeypatch):
+    identity_dir = _identity_dir(tmp_path)
+    monkeypatch.setenv("MNEVO_LLM_API_KEY", "test-key")
+    fake = ('{"files":[{"name":"values.md","content":"# Values\\n\\n不应生效",'
+            '"reason":"测"}]}')
+    monkeypatch.setattr(mb, "llm_chat", lambda *a, **k: fake)
+    engine.identity(identity_dir=identity_dir, since_days=30)
+    assert engine.review_decide("identity", "dismiss") == 0
+    assert "旧内容。" in (identity_dir / "values.md").read_text(encoding="utf-8")
+    assert "不应生效" not in (identity_dir / "values.md").read_text(encoding="utf-8")
+
+
+def test_identity_skips_without_key(engine, tmp_path, monkeypatch):
+    monkeypatch.delenv("MNEVO_LLM_API_KEY", raising=False)
+    assert engine.identity(identity_dir=_identity_dir(tmp_path)) == 0
+    audit = (engine.home / "audit" / "butler.jsonl").read_text(encoding="utf-8")
+    assert '"skipped": "no_llm_key"' in audit
