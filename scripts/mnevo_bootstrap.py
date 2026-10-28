@@ -57,10 +57,30 @@ def _truncate(text: str, limit: int) -> tuple[str, bool]:
     return cut.rstrip(), True
 
 
+def _budgets(files: dict[str, str | None], budget: int) -> dict[str, int]:
+    """水位分配：短文件全额满足，剩余均分给长文件（总额不超 budget）。
+    均分制会在总额富余时截断最长件（2026-10-28 实测），此为修正。"""
+    pending = [n for n in SECTION_ORDER if files.get(n)]
+    caps: dict[str, int] = {}
+    remaining = budget
+    while pending:
+        share = max(MIN_SECTION_BUDGET, remaining // len(pending))
+        settled = [n for n in pending if len(files[n]) <= share]
+        if not settled:
+            for n in pending:
+                caps[n] = share
+            break
+        for n in settled:
+            caps[n] = len(files[n])
+            remaining -= caps[n]
+            pending.remove(n)
+    return caps
+
+
 def build_profile(files: dict[str, str | None], budget: int = DEFAULT_BUDGET,
                   stale_threads: bool = False) -> str:
     """装配确定性注入块。同样输入+同样的缺失/过时状态 → 逐字节相同输出。"""
-    per = max(MIN_SECTION_BUDGET, budget // len(SECTION_ORDER))
+    caps = _budgets(files, budget)
     lines = ["# Mnevo 身份层（常驻注入快照 · 内容一律人工确认）", ""]
     for name in SECTION_ORDER:
         lines.append(f"## {SECTION_TITLES[name]}")
@@ -68,7 +88,7 @@ def build_profile(files: dict[str, str | None], budget: int = DEFAULT_BUDGET,
         if text is None:
             lines.append(f"（缺失：{name}——见 Mnevo/identity/）")
         else:
-            body, cut = _truncate(text, per)
+            body, cut = _truncate(text, caps.get(name, budget))
             lines.append(body)
             if cut:
                 lines.append(f"…（{name} 超预算截断，全文见源文件）")

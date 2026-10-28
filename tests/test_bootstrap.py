@@ -49,6 +49,15 @@ def test_budget_truncates_at_line_boundary():
             assert line.endswith("填充"), "不切半行"
 
 
+def test_waterfill_budget_gives_short_files_full_content():
+    files = {"persona.md": "短" * 100, "values.md": "短" * 100,
+             "goals.md": "短" * 100, "threads.md": "长" * 700}
+    profile = mb.build_profile(files, budget=2000)  # 总额富余（1000+700<2000）
+    assert "超预算截断" not in profile, "总额富余时不得截断最长件"
+    profile_tight = mb.build_profile(files, budget=800)  # 长件只能分到 500
+    assert "超预算截断" in profile_tight
+
+
 def test_stale_threads_marker(tmp_path):
     d = _identity_dir(tmp_path)
     old = time.time() - 20 * 86400
