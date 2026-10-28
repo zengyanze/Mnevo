@@ -82,6 +82,16 @@ python scripts/mnevo_bootstrap.py build --identity identity/live   # 身份层�
 python scripts/mnevo_bootstrap.py check --identity identity/live   # 体检：缺件/threads 过时
 ```
 
+### 规模化复测（v0.2-6）
+
+```bash
+python scripts/mnevo_scaletest.py generate --n 300 --out s.json       # 确定性合成语料（含分级近重复对）
+python scripts/mnevo_scaletest.py load --in s.json --url ...          # 灌库（幂等）
+python scripts/mnevo_scaletest.py probe-retrieval --in s.json --url ...  # hit@k / MRR / 延迟
+python scripts/mnevo_scaletest.py probe-dedup --in s.json --url ...      # 判重阈值校准带
+python scripts/mnevo_scaletest.py cleanup --in s.json --url ...      # 按 hash 清场
+```
+
 命名：Mnevo（希腊语 μνήμη 词根自造词，2026-10-14 定名；查证记录见 PLAN §14-3）。设计哲学：记忆 → 叙事自我 → 延展心智（PLAN §0.4）。
 
 ## License
