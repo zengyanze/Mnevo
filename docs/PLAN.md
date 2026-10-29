@@ -260,7 +260,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 1. ✅ **Spike 判读完成（2026-10-26，观察期 10-15→10-26）**：引擎=惰性 ADD-only——8 次自动巩固零失败但 processed 累计个位数、compressed/forgotten 恒 0，v12 遗忘门槛（relevance<0.1∧90 天∧365 天）在真实使用频率下≈永不遗忘；与 2025-12 官方实测（日增 349 派生）相反，小库上无派生、无合并、无遗忘，库呈线性积累。**检索/调度/稳定性全部合格**（bge 真语义含跨语言✅、8/8 夜跑零失败✅、12 天零崩溃✅）。结论：引擎当存储层用，**代谢链全部由管家接管**（见任务 3 与 Q27）；第二发现：写入习惯靠建议性文本不生效，需机制性触发（候选：pi 会话收尾钩子）；
 2. ✅（2026-10-14）仓库骨架：README/LICENSE/.gitignore + adapters/（pi 习惯书 v0.1）+ identity/（结构说明，live 不入库）+ docs/spike-runbook.md；身份层真身种子（2026-10-26 用户确认转正：live/{persona,values,goals,threads}.md 四件）。
 3. ✅ **管家 v0.1（2026-10-26 闭环）**：代谢链全接管——判重 scan（阈值 0.90）+ LLM 蒸馏提案（zai glm-5.3；首次闭环 2026-10-26：4 条里程碑→340 字全景稿，先删后存+失败回滚）+ 遗忘提案（归档≠降权≠删除）+ 审计日志 + 身份层提案流；触发=cron 三链（日巩固 02:00/夜备份 02:30/周扫描日 03:30 + 日蒸馏 03:15）；写入钩子 mnevo-session-write.ts 已验证（含 2026-10-26 首次真实产出；untagged 违例已加重文案修复）。
-4. ✅（2026-10-26）pi adapter 习惯书 v0.1 + 三工作区 AGENTS.md 接入；**WorkBuddy adapter 用户拍板跳过**（2026-10-26，暂不接入；adapter 优先级 pi→Claude Desktop，WorkBuddy 观察名单）。§14-6 随之降级：接入前再验。
+4. ✅（2026-10-26）pi adapter 习惯书 v0.1 + 三工作区 AGENTS.md 接入；**WorkBuddy adapter 用户拍板跳过**（2026-10-26；adapter 序列=pi✓→codex✓→Claude Desktop，WorkBuddy 观察名单）。**2026-10-29 补：codex adapter 上线**（`adapters/codex.md` REST 路线习惯书 + `scripts/mnevo_rest.py` 习惯 CLI：store/search/recent、长文 stdin、客户端 secrets 闸门 9 模式；宿主现实=用户主力 agent 已转 Codex）并现场 E2E 验证：bootstrap 注入→语义召回→闸门拒存→stdin 管道写入→回读 top-1 命中，全程 REST。§14-6 随之降级：接入前再验。
 5. ✅ **记忆包 v0.1 + 备份双轨（2026-10-26）**：mnevo_pack.py export/import/verify（manifest sha256 完整性校验，tests 18/18）；work 区=s1 夜间 cron tar.gz 14 天轮转（不出公司基础设施✓红线）；personal 区=age 加密+GitHub 私有仓哑存储工具链就绪（scripts/mempack_remote_backup.sh，假包全链验证字节级一致；密钥 ~/.mnevo/keys/personal.agekey，私钥用户自行离线备份），personal 引擎上线即用。
 6. ✅ **验收双测试通过（2026-10-26，8 条小库）**：①导出往返不失真——export 8→清空→import 回 8/8、verify missing=0 extra=0、双 spot 检索命中正确条目；②冷启动接得住——全新 pi 会话仅靠检索三问全对（最近在忙什么/推进到哪/"继续上礼拜那件事"），引用原文、诚实标注歧义、不编造。已知边界：小库上通过，规模化后需复测（v0.2）。
 
@@ -331,6 +331,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 | Q28（v0.1 收官） | v0.1 六任务全部关闭；验收双测试以灾备演练（清空重导入）+spot 检索+全新会话三问形式通过（小库上）；work 区备份留公司内轮转，personal 区 age+GitHub 工具链就绪待引擎；WorkBuddy 拍板跳过 | 2026-10-26 用户"按序推进+记录问题不堵塞"总指令下的收官；遗留问题清单=observations/v0.1-issues.md（本地） |
 | Q29（分型衰减落地） | 分型走 tags（`mnevo:type:skill｜fact`，缺省 episode，identity 不入引擎库）；降权=引擎 PUT tags+metadata 打标（不动内容/时间戳）；谱系=merge/distill 应用后回写 `mnevo_supersedes`，pack v2 携带（读端兼容 v1）；召回侧降权无引擎钩子→先蒸馏管道排除+归档档兜底（§14-8） | 2026-10-27 v0.2-3；宿主无关原则不变（只依赖 REST 语义，不碰引擎内部）；三档不混用铁律（§4.3）保持 |
 | Q30（离职逃生舱启用） | work 全量包（10 条+身份层四件+observations+管家审计/提案/状态）敏感扫描零命中后 age 加密，一次性入个人备份仓 `escape/`，字节级往返验证通过；§9.0"work 包不出公司基础设施"作为**日常**红线保持，逃生舱=用户明示授权的一次性例外；此后主战场转 personal 区，v0.2-4（mem0 二号引擎）兼作新环境引擎选型 | 2026-10-27 用户指令"有序推进同时做好备份，即将离职，需异地继续开发"；age 私钥永不入任何仓，用户离线自持 |
+| Q31（adapter 第二员=codex） | codex 走 REST 而非 MCP（其宿主无 mnevo MCP 工具）：`mnevo_rest.py` 习惯 CLI（store 自动打 agent:codex、search 位置参数、长文 stdin 双解码兜底 Windows 管道编码、客户端 secrets 闸门）+ AGENTS.md 双路线记忆习惯段（AGENTS.md 即 codex 的注入面） | 2026-10-29 用户"现在用 codex，做适配并验证"；Q27 教训（建议性文本不生效）→ 以最低摩擦 CLI + AGENTS.md 投影降低执行成本，闸门前移到客户端 |
 
 ---
 
