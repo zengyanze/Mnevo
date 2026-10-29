@@ -6,7 +6,10 @@
 #   --key-file  age 私钥文件（读其中公钥做加密端），默认 ~/.mnevo/keys/personal.agekey
 #   --base      仓库内目录前缀，默认 packs（最终路径 packs/<文件名>.age）
 #
-# 环境: 需要 age、gh（已登录）。恢复: gh api 下载 blob → base64 -d | age -d -i <私钥>
+# 环境: 需要 age、gh（已登录）。恢复（注意 contents GET 对 >1MB 不内联 content，
+#   必须走 git blobs API）: sha=$(gh api repos/<R>/contents/<P> --jq .sha)
+#   gh api repos/<R>/git/blobs/$sha --jq .content | base64 -d | age -d -i <私钥>
+#   上传侧 >~1MB 同理不能用 -f content=<b64>（argv 上限），用 gh api --input payload.json
 # 红线: 日常只用于 personal 区记忆包；work 区包不出公司基础设施（PLAN §9.2）。
 #   例外=离职逃生舱（PLAN §8/§14-7/Q30）：work 包经敏感扫描+用户明示授权，
 #   一次性入个人备份仓（age 加密，密钥永不入库）。

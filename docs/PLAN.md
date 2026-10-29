@@ -296,7 +296,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 4. PAM 映射的字段对齐细节（v0.2）；
 5. 团队/家庭共享脑的 schema 口子（远期，不设计不承诺）。
 6. **WorkBuddy 接入路径（2026-10-23 降级为待验证的省事解）**：WorkBuddy 与 pi 同机，共用 SSH 隧道连 127.0.0.1:8000/mcp，服务器零暴露、OAuth 无限期延后。待验证三项见 adapters/workbuddy.md（Bearer header 支持/工具可见/agent 标识）。原“内网直连 or TLS 反代”仅在 WorkBuddy 不与 pi 同机时才需要；
-7. ⚠️ **进行中（2026-10-27 用户宣布离职）**：逃生舱正式启用（Q30）——work 全量包（记忆+身份层四件+观察记录+管家资产）经敏感扫描（零命中）age 加密一次性入个人备份仓，下载→解密→哈希比对字节级一致；s1 清理清单与异地恢复手册在私有工作区 `runbooks/departure-migration.md`（不入公开仓）。库内容=经历类个人笔记（经历/载荷分界自始执行），与雇主的沟通口径由用户负责。
+7. ✅ **已执行（2026-10-29）**：终版备份（37 条全量包+身份层四件+引擎 A DB 一致性快照【156 行含软删代谢史】+butler/cron 资产；age 加密入个人备份仓 `escape/mnevo-escape-20261029`；下载→解密→SHA256→内层包完整性四重验证通过）后，s1 实例**全部清除**：cron×4、引擎 A/B 进程与端口、`~/.mnevo`（552MB venv 等）、`~/.local/share/mcp-memory`（引擎 DB——在 .mnevo 之外，几被漏掉）、uv 及缓存、`~/.mem0`、ONNX/HF 模型缓存——零残留复核通过。work 区物理归零；恢复与续用完全由个人备份仓+两 GitHub 仓承载（手册=私有工作区 runbooks/departure-migration.md）。库内容=经历类个人笔记（经历/载荷分界自始执行），与雇主沟通口径由用户负责。
 8. **降权档的召回侧落地（2026-10-27 发现）**：引擎 v12 `/api/search` 无 tag 排除/权重参数，quality_boost 依赖 AI 质量分——§4.3 降权档当前仅实现蒸馏管道排除+包级标记，召回侧排除仍靠归档档（软删）引擎强制。去向：观察上游 search 是否加 metadata/tag 过滤；或 Mnevo 自封装 recall 层（v0.2+ 不急）。
 
 ---
@@ -332,6 +332,7 @@ MCP 封装的是"手"（管道、schema、鉴权），**没封装"习惯"**（�
 | Q29（分型衰减落地） | 分型走 tags（`mnevo:type:skill｜fact`，缺省 episode，identity 不入引擎库）；降权=引擎 PUT tags+metadata 打标（不动内容/时间戳）；谱系=merge/distill 应用后回写 `mnevo_supersedes`，pack v2 携带（读端兼容 v1）；召回侧降权无引擎钩子→先蒸馏管道排除+归档档兜底（§14-8） | 2026-10-27 v0.2-3；宿主无关原则不变（只依赖 REST 语义，不碰引擎内部）；三档不混用铁律（§4.3）保持 |
 | Q30（离职逃生舱启用） | work 全量包（10 条+身份层四件+observations+管家审计/提案/状态）敏感扫描零命中后 age 加密，一次性入个人备份仓 `escape/`，字节级往返验证通过；§9.0"work 包不出公司基础设施"作为**日常**红线保持，逃生舱=用户明示授权的一次性例外；此后主战场转 personal 区，v0.2-4（mem0 二号引擎）兼作新环境引擎选型 | 2026-10-27 用户指令"有序推进同时做好备份，即将离职，需异地继续开发"；age 私钥永不入任何仓，用户离线自持 |
 | Q31（adapter 第二员=codex） | codex 走 REST 而非 MCP（其宿主无 mnevo MCP 工具）：`mnevo_rest.py` 习惯 CLI（store 自动打 agent:codex、search 位置参数、长文 stdin 双解码兜底 Windows 管道编码、客户端 secrets 闸门）+ AGENTS.md 双路线记忆习惯段（AGENTS.md 即 codex 的注入面） | 2026-10-29 用户"现在用 codex，做适配并验证"；Q27 教训（建议性文本不生效）→ 以最低摩擦 CLI + AGENTS.md 投影降低执行成本，闸门前移到客户端 |
+| Q32（s1 实例清除，v0.2 阶段收官） | 终版备份四重验证（字节级 SHA256+内层包 37/37）后执行 s1 清除：cron/引擎 A/B/`~/.mnevo`/`~/.local/share/mcp-memory`（引擎 DB 在 .mnevo 之外）/uv/`~/.mem0`/模型缓存；work 区物理归零，恢复由个人仓承载 | 2026-10-29 用户指令"阶段性收尾+备份保证异地可部署+清除 .24 实例"；工程发现：GitHub contents API 对 >1MB 不内联（上传撞 argv 上限、下载须走 git blobs API）——已写入备份脚本注释 |
 
 ---
 
